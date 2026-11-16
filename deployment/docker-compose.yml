@@ -1,0 +1,87 @@
+# Kinetune — local / pilot environment
+#
+#   cp .env.example .env        # then set a real password
+#   docker compose up -d        # starts PostgreSQL, then applies migrations
+#   docker compose logs migrate # shows which migrations were applied
+#
+# The database structure is never created by hand: the one-shot "migrate"
+# service runs "alembic upgrade head" every time the stack starts.
+# Already-applied migrations are skipped (tracked in table alembic_version).
+
+name: kinetune
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # the cluster superuser: used only to bootstrap and for maintenance,
+      # never by the application or by migrations
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # consumed once by db/init/10_login_roles.sh to create the login roles
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+      API_PASSWORD: ${API_PASSWORD:?set API_PASSWORD in .env}
+      READER_PASSWORD: ${READER_PASSWORD:?set READER_PASSWORD in .env}
+      TZ: UTC
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<version>/,
+      # so the volume is mounted one level up (not .../data as in <= 17).
+      - pgdata:/var/lib/postgresql
+      # login roles are created once, when the data volume is first initialised
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # reachable only from this machine, not from the network
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      # -h 127.0.0.1 forces TCP: stays unhealthy during the init-only phase
+      # (temp server, socket only) so migrate never connects to a half-set-up DB
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: ./db
+    restart: "no"                 # runs once and exits
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # migrations run as the object owner kinetune_migrator (not the superuser),
+      # so every object and every default privilege is owned by that role
+      POSTGRES_USER: kinetune_migrator
+      POSTGRES_PASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  # Test/demo data — NOT part of the default stack. Load it explicitly with:
+  #   docker compose --profile test run --rm seed-test
+  # Guarded: it refuses to run on a database that already has users.
+  seed-test:
+    image: postgres:18
+    profiles: ["test"]
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      PGUSER: kinetune_migrator
+      PGPASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./db/seed:/seed:ro
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/seed/test_data.sql"]
+
+  # The backend (FastAPI) will be added here with:
+  #   depends_on:
+  #     migrate:
+  #       condition: service_completed_successfully
+  # so the API never starts against an outdated schema.
+
+volumes:
+  pgdata:

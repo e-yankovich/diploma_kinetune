@@ -1,0 +1,43 @@
+-- =====================================================================
+-- Kinetune — login roles (run ONCE by a superuser when the cluster is created)
+-- Called by 10_login_roles.sh with psql variables taken from .env:
+--   :db  :migrator_pw  :api_pw  :reader_pw
+-- Not a migration on purpose: login roles carry passwords, which must not
+-- be stored in Git. Group roles and privileges are in migration 0003.
+-- (.psql extension: the Docker entrypoint does not run this file directly.)
+-- =====================================================================
+\set ON_ERROR_STOP on
+
+-- store role passwords only as SCRAM-SHA-256 verifiers (never MD5)
+SET password_encryption = 'scram-sha-256';
+
+-- owner of the database and of all Kinetune objects; runs migrations.
+-- Not a superuser. CREATEROLE only to manage the app_* group roles
+-- (PostgreSQL 16+: it can manage only roles it created itself).
+CREATE ROLE kinetune_migrator
+    LOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS
+    PASSWORD :'migrator_pw';
+
+-- the backend; receives app_write in migration 0003
+CREATE ROLE kinetune_api
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+    CONNECTION LIMIT 20
+    PASSWORD :'api_pw';
+
+-- read-only access for reports; receives app_read in migration 0003
+CREATE ROLE kinetune_reader
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+    CONNECTION LIMIT 5
+    PASSWORD :'reader_pw';
+
+-- session limits (data_integrity_and_transactions.md §3.1)
+ALTER ROLE kinetune_api    SET statement_timeout = '5s';
+ALTER ROLE kinetune_api    SET lock_timeout = '2s';
+ALTER ROLE kinetune_api    SET idle_in_transaction_session_timeout = '10s';
+ALTER ROLE kinetune_reader SET default_transaction_read_only = on;
+ALTER ROLE kinetune_reader SET statement_timeout = '30s';
+
+-- the migrator owns the database (and therefore may create schemas in it)
+ALTER DATABASE :"db" OWNER TO kinetune_migrator;
+REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE :"db" TO kinetune_api, kinetune_reader;
