@@ -4,7 +4,7 @@
 --   docker compose --profile test run --rm seed-test
 --   or: psql -v ON_ERROR_STOP=1 --single-transaction -f db/seed/test_data.sql
 --
--- Requires migrations 0001–0004 (reference data comes from 0002).
+-- Requires migrations 0001–0005 (reference data comes from 0002).
 -- Loads only into a database without users (guard below).
 -- The exercise library here is a DEMO library made for testing; the real
 -- library (30–50 exercises) is compiled by the author (thesis, C3).
@@ -14,6 +14,7 @@
 -- Ids are explicit (OVERRIDING SYSTEM VALUE) so tests can refer to them;
 -- sequences are moved past them at the end.
 -- Body areas: 1 neck, 2 shoulders, 3 wrists, 4 lower_back, 5 hips, 6 knees
+-- Joints:     1 cervical spine, 2 shoulder, 3 wrist, 4 lumbar spine, 5 hip, 6 knee
 -- Rules: 9 = BR9 alternative, 10 = BR10 replacement, 11 = BR11 warning
 -- =====================================================================
 
@@ -49,43 +50,46 @@ INSERT INTO user_role (user_id, role_id, granted_by) VALUES
 
 -- ---------------------------------------------------------------------
 -- 2. Demo exercise library (29 exercises, one inactive)
+--    rep_duration_sec = seconds for ONE repetition (static: one hold).
+--    Plan items below use reps_count; reps x rep_duration_sec gives the
+--    same item durations as before, so plan 1 still fits a 45-minute class.
 -- ---------------------------------------------------------------------
-INSERT INTO exercise (id, name, description, mode, starting_pose, is_symmetric, difficulty, default_duration_sec, is_active)
+INSERT INTO exercise (id, name, description, mode, starting_pose, is_symmetric, difficulty, rep_duration_sec, is_active)
 OVERRIDING SYSTEM VALUE VALUES
   -- warm-up (dynamic)
-  ( 1, 'Neck rolls',                     'Slow half circles of the head',             'dynamic',       'seated',   true,  1, 120, true),
-  ( 2, 'Shoulder circles',               'Forward and backward circles',              'dynamic',       'standing', true,  1, 120, true),
-  ( 3, 'Wrist circles',                  'Circles with interlaced fingers',           'dynamic',       'seated',   true,  1,  90, true),
-  ( 4, 'Pelvic tilts',                   'Lying on the back, knees bent',             'dynamic',       'lying',    true,  1, 120, true),
-  ( 5, 'Leg swings',                     'Front-to-back swings on one leg',           'dynamic',       'balance',  false, 1, 120, true),
-  ( 6, 'Hip circles',                    'Hands on hips, wide circles',               'dynamic',       'standing', true,  1, 120, true),
-  ( 7, 'Torso twists',                   'Standing rotations, arms loose',            'dynamic',       'standing', true,  1, 120, true),
-  ( 8, 'Knee lifts',                     'Marching on the spot, knees high',          'dynamic',       'standing', true,  1, 120, true),
+  ( 1, 'Neck rolls',                     'Slow half circles of the head',             'dynamic',       'seated',   true,  1,  12, true),
+  ( 2, 'Shoulder circles',               'Forward and backward circles',              'dynamic',       'standing', true,  1,  12, true),
+  ( 3, 'Wrist circles',                  'Circles with interlaced fingers',           'dynamic',       'seated',   true,  1,   6, true),
+  ( 4, 'Pelvic tilts',                   'Lying on the back, knees bent',             'dynamic',       'lying',    true,  1,  10, true),
+  ( 5, 'Leg swings',                     'Front-to-back swings on one leg',           'dynamic',       'balance',  false, 1,  12, true),
+  ( 6, 'Hip circles',                    'Hands on hips, wide circles',               'dynamic',       'standing', true,  1,  12, true),
+  ( 7, 'Torso twists',                   'Standing rotations, arms loose',            'dynamic',       'standing', true,  1,  12, true),
+  ( 8, 'Knee lifts',                     'Marching on the spot, knees high',          'dynamic',       'standing', true,  1,   6, true),
   -- main part
-  ( 9, 'Standing forward fold',          'Fold with a gentle sway',                   'stato_dynamic', 'standing', true,  2, 240, true),
-  (10, 'Seated forward fold',            'Legs straight, reach for the feet',         'static',        'seated',   true,  1, 240, true),
-  (11, 'Deep lunge',                     'Hip flexor stretch with small pulses',      'stato_dynamic', 'standing', false, 2, 180, true),
-  (12, 'Sphinx back extension',          'Lying on the stomach, lift the chest',      'stato_dynamic', 'lying',    true,  1, 180, true),
-  (13, 'Lying hip flexor stretch',       'Lying at the edge of a mat, one leg down',  'static',        'lying',    false, 1, 180, true),
-  (14, 'Standing quad stretch',          'Heel to glute, standing on one leg',        'static',        'balance',  false, 2, 150, true),
-  (15, 'Side-lying quad stretch',        'Heel to glute, lying on the side',          'static',        'lying',    false, 1, 150, true),
-  (16, 'Pigeon pose',                    'Front shin across the mat',                 'static',        'lying',    false, 3, 180, true),
-  (17, 'Figure-four stretch',            'Lying, ankle over the opposite knee',       'static',        'lying',    false, 1, 180, true),
-  (18, 'Doorway chest stretch',          'Forearm on a door frame, step through',     'static',        'standing', false, 1, 150, true),
-  (19, 'Cross-body arm swings',          'Arms swing across the chest',               'dynamic',       'standing', false, 1, 120, true),
-  (20, 'Kneeling wrist stretch',         'Palms on the floor, fingers to the knees',  'static',        'seated',   true,  2, 120, true),
-  (21, 'Wall wrist stretch',             'Palm against a wall, fingers down',         'static',        'standing', false, 1, 120, true),
-  (22, 'Tree pose',                      'Foot on the inner thigh, arms up',          'static',        'balance',  false, 2, 120, true),
-  (23, 'Butterfly stretch',              'Soles together, gentle knee flutters',      'stato_dynamic', 'seated',   true,  1, 180, true),
-  (24, 'Seated spinal twist',            'Cross-legged rotation with breathing',      'stato_dynamic', 'seated',   false, 1, 150, true),
+  ( 9, 'Standing forward fold',          'Fold with a gentle sway',                   'stato_dynamic', 'standing', true,  2,  60, true),
+  (10, 'Seated forward fold',            'Legs straight, reach for the feet',         'static',        'seated',   true,  1,  60, true),
+  (11, 'Deep lunge',                     'Hip flexor stretch with small pulses',      'stato_dynamic', 'standing', false, 2,  45, true),
+  (12, 'Sphinx back extension',          'Lying on the stomach, lift the chest',      'stato_dynamic', 'lying',    true,  1,  15, true),
+  (13, 'Lying hip flexor stretch',       'Lying at the edge of a mat, one leg down',  'static',        'lying',    false, 1,  45, true),
+  (14, 'Standing quad stretch',          'Heel to glute, standing on one leg',        'static',        'balance',  false, 2,  30, true),
+  (15, 'Side-lying quad stretch',        'Heel to glute, lying on the side',          'static',        'lying',    false, 1,  30, true),
+  (16, 'Pigeon pose',                    'Front shin across the mat',                 'static',        'lying',    false, 3,  60, true),
+  (17, 'Figure-four stretch',            'Lying, ankle over the opposite knee',       'static',        'lying',    false, 1,  45, true),
+  (18, 'Doorway chest stretch',          'Forearm on a door frame, step through',     'static',        'standing', false, 1,  30, true),
+  (19, 'Cross-body arm swings',          'Arms swing across the chest',               'dynamic',       'standing', false, 1,   6, true),
+  (20, 'Kneeling wrist stretch',         'Palms on the floor, fingers to the knees',  'static',        'seated',   true,  2,  30, true),
+  (21, 'Wall wrist stretch',             'Palm against a wall, fingers down',         'static',        'standing', false, 1,  30, true),
+  (22, 'Tree pose',                      'Foot on the inner thigh, arms up',          'static',        'balance',  false, 2,  30, true),
+  (23, 'Butterfly stretch',              'Soles together, gentle knee flutters',      'stato_dynamic', 'seated',   true,  1,  30, true),
+  (24, 'Seated spinal twist',            'Cross-legged rotation with breathing',      'stato_dynamic', 'seated',   false, 1,  30, true),
   -- cool-down
-  (25, 'Child''s pose',                  'Kneeling, forehead to the floor',           'static',        'seated',   true,  1, 240, true),
-  (26, 'Knees to chest',                 'Lying on the back, hug the knees',          'static',        'lying',    true,  1, 240, true),
-  (27, 'Legs up the wall',               'Lying, legs resting on a wall',             'static',        'lying',    true,  1, 300, true),
+  (25, 'Child''s pose',                  'Kneeling, forehead to the floor',           'static',        'seated',   true,  1,  60, true),
+  (26, 'Knees to chest',                 'Lying on the back, hug the knees',          'static',        'lying',    true,  1,  60, true),
+  (27, 'Legs up the wall',               'Lying, legs resting on a wall',             'static',        'lying',    true,  1,  60, true),
   -- inactive (kept because an old plan uses it)
-  (28, 'Ballistic toe touches',          'Bouncing toe touches (no longer used)',     'dynamic',       'standing', true,  2, 120, false),
+  (28, 'Ballistic toe touches',          'Bouncing toe touches (no longer used)',     'dynamic',       'standing', true,  2,   6, false),
   -- high difficulty
-  (29, 'Front split',                    'Full split, front leg straight',            'static',        'seated',   false, 3, 180, true);
+  (29, 'Front split',                    'Full split, front leg straight',            'static',        'seated',   false, 3,  60, true);
 
 -- compensation (BR6): forward folds must be followed by a back extension
 UPDATE exercise SET required_compensation_id = 12 WHERE id IN (9, 10);
@@ -101,14 +105,49 @@ INSERT INTO exercise_muscle (exercise_id, muscle_id, is_primary) VALUES
   (25,10,true),(25,6,false),(26,10,true),(26,12,false),(27,18,true),(27,19,false),
   (28,18,true),(29,18,true),(29,14,true);
 
--- is_primary = the joint carries the main (medium/high) load
-INSERT INTO exercise_joint (exercise_id, joint_id, is_primary) VALUES
-  (1,1,true),(2,2,true),(3,3,true),(4,4,true),(5,5,true),(5,6,false),(6,5,true),(7,4,true),
-  (8,5,true),(8,6,false),(9,4,true),(9,5,false),(10,5,true),(11,5,true),(11,6,true),
-  (12,4,true),(13,5,true),(13,6,false),(14,6,true),(15,6,false),(16,5,true),(16,6,true),
-  (17,5,true),(18,2,true),(19,2,true),(20,3,true),(20,6,false),(21,3,false),(22,5,true),(22,6,false),
-  (23,5,true),(24,4,true),(25,6,true),(25,4,false),(26,4,true),(27,5,false),(28,4,true),
-  (29,5,true),(29,6,false);
+-- is_primary = a main joint of the exercise (what it is "about"; library display)
+-- load       = how much the exercise loads this joint (BR9: medium/high triggers;
+--              BR11: a candidate must have a lower load or not use the joint).
+-- Both are expert estimates of the coach. Example: the deep lunge (11) is about
+-- the hip (primary) but loads the knee highly (not primary, load 'high').
+-- Edge cases kept for the recommendations in block 5:
+--   knees:      standing quad 14 (high) -> side-lying quad 15 (medium)
+--               child's pose 25 (high)  -> knees to chest 26 (knee not used)
+--   lower back: standing fold 9 (high)  -> seated fold 10 (lumbar not used)
+--   hips:       pigeon 16 (high)        -> figure-four 17 (medium)
+--   wrists:     kneeling wrist 20 (high) -> wall wrist 21 (low)
+--   leg swings 5 and knee lifts 8 load the knee only lightly, so knee
+--   discomfort does not trigger them
+INSERT INTO exercise_joint (exercise_id, joint_id, is_primary, load) VALUES
+  ( 1,1,true, 'medium'),
+  ( 2,2,true, 'medium'),
+  ( 3,3,true, 'medium'),
+  ( 4,4,true, 'low'),
+  ( 5,5,true, 'medium'), ( 5,6,false,'low'),
+  ( 6,5,true, 'low'),
+  ( 7,4,true, 'low'),
+  ( 8,5,true, 'medium'), ( 8,6,false,'low'),
+  ( 9,4,true, 'high'),   ( 9,5,false,'medium'),
+  (10,5,true, 'medium'),
+  (11,5,true, 'high'),   (11,6,false,'high'),
+  (12,4,true, 'low'),
+  (13,5,true, 'medium'), (13,6,false,'low'),
+  (14,6,true, 'high'),
+  (15,6,true, 'medium'),
+  (16,5,true, 'high'),   (16,6,true, 'medium'),
+  (17,5,true, 'medium'),
+  (18,2,true, 'medium'),
+  (19,2,true, 'medium'),
+  (20,3,true, 'high'),   (20,6,false,'medium'),
+  (21,3,true, 'low'),
+  (22,5,true, 'medium'), (22,6,false,'low'),
+  (23,5,true, 'medium'),
+  (24,4,true, 'medium'),
+  (25,6,true, 'high'),   (25,4,false,'low'),
+  (26,4,true, 'low'),
+  (27,5,true, 'low'),
+  (28,4,true, 'high'),
+  (29,5,true, 'high'),   (29,6,false,'medium');
 
 -- graph: undirected variations (stored once, smaller id first) and directed progressions
 INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES
@@ -124,78 +163,104 @@ INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_direct
   (21, 20, 'progression', true);    -- wall wrist -> kneeling wrist
 
 -- ---------------------------------------------------------------------
--- 3. Plans
+-- 3. Plans. Every plan starts as 'draft'; items are added while it is a
+--    draft, then the coach sets the target duration and moves it to
+--    'completed' and (after the BR1–BR8 check) 'reviewed'.
+--    Durations (reps x rep_duration_sec): plan 1 = 41 min (target 45, BR8 OK),
+--    plan 2 = 36 min and plan 3 = 24.5 min (target 45, BR8 broken),
+--    plan 4 = 11 min, plan 5 = 26 min (target 30), plan 6 = 17 min (target 20).
 -- ---------------------------------------------------------------------
 INSERT INTO plan (id, coach_id, title, notes) OVERRIDING SYSTEM VALUE VALUES
   (1, 2, 'Tuesday evening: full body',   'Passes BR1–BR8 (45-min class)'),
-  (2, 2, 'Hips and lower back',          'Deliberately breaks BR5 (static share) and BR6 (compensation too far)'),
-  (3, 2, 'Upper body and wrists',        'Deliberately breaks BR5'),
+  (2, 2, 'Hips and lower back',          'Deliberately breaks BR5 (static share), BR6 (compensation too far) and BR8 (36 of 45 min)'),
+  (3, 2, 'Upper body and wrists',        'Deliberately breaks BR5 and BR8 (24.5 of 45 min)'),
   (4, 4, 'Old plan (archived)',          'Uses an inactive exercise; owner deactivated'),
-  (5, 3, 'Morning stretch',              'Plan of the second coach');
+  (5, 3, 'Morning stretch',              'Plan of the second coach (30-min class)'),
+  (6, 2, 'Short recovery class',         'Completed, not reviewed yet; asymmetric exercises done on both sides in one item'),
+  (7, 2, 'New plan (work in progress)',  'Draft without a target duration');
 
-INSERT INTO plan_item (id, plan_id, exercise_id, phase, position, duration_sec, side, reps_count)
+INSERT INTO plan_item (id, plan_id, exercise_id, phase, position, side, reps_count)
 OVERRIDING SYSTEM VALUE VALUES
-  -- plan 1
-  (101,1, 1,'warm_up',  1,120,'both', 10),
-  (102,1, 2,'warm_up',  2,120,'both', 10),
-  (103,1, 5,'warm_up',  3,120,'left', 10),   -- balance exercise in the first quarter (BR9)
-  (104,1, 5,'warm_up',  4,120,'right',10),
-  (105,1, 8,'warm_up',  5,120,'both', 20),
-  (106,1, 9,'main',     1,240,'both', NULL), -- needs compensation 12 (position 6: 5 later, OK)
-  (107,1,11,'main',     2,180,'left', NULL),
-  (108,1,11,'main',     3,180,'right',NULL),
-  (109,1,14,'main',     4,150,'left', NULL),
-  (110,1,14,'main',     5,150,'right',NULL),
-  (111,1,12,'main',     6,180,'both', 8),
-  (112,1,19,'main',     7,120,'left', NULL),
-  (113,1,19,'main',     8,120,'right',NULL),
-  (114,1,25,'cool_down',1,240,'both', NULL),
-  (115,1,27,'cool_down',2,300,'both', NULL),
+  -- plan 1 (15 items; the first quarter = items 1–3)
+  (101,1, 1,'warm_up',  1,'both', 10),   -- 120 s
+  (102,1, 2,'warm_up',  2,'both', 10),   -- 120 s
+  (103,1, 5,'warm_up',  3,'left', 10),   -- 120 s; balance exercise in the first quarter (BR9)
+  (104,1, 5,'warm_up',  4,'right',10),   -- 120 s
+  (105,1, 8,'warm_up',  5,'both', 20),   -- 120 s
+  (106,1, 9,'main',     1,'both',  4),   -- 240 s; needs compensation 12 (position 6: 5 later, OK)
+  (107,1,11,'main',     2,'left',  4),   -- 180 s
+  (108,1,11,'main',     3,'right', 4),   -- 180 s
+  (109,1,14,'main',     4,'left',  5),   -- 150 s
+  (110,1,14,'main',     5,'right', 5),   -- 150 s
+  (111,1,12,'main',     6,'both', 12),   -- 180 s
+  (112,1,19,'main',     7,'left', 20),   -- 120 s
+  (113,1,19,'main',     8,'right',20),   -- 120 s
+  (114,1,25,'cool_down',1,'both',  4),   -- 240 s
+  (115,1,27,'cool_down',2,'both',  5),   -- 300 s
   -- plan 2
-  (201,2, 4,'warm_up',  1,120,'both', 12),
-  (202,2, 6,'warm_up',  2,120,'both', 10),
-  (203,2, 7,'warm_up',  3,120,'both', 10),
-  (204,2,10,'main',     1,240,'both', NULL), -- compensation 12 is 6 exercises later (BR6 warning)
-  (205,2,16,'main',     2,180,'left', NULL),
-  (206,2,16,'main',     3,180,'right',NULL),
-  (207,2,23,'main',     4,180,'both', NULL),
-  (208,2,24,'main',     5,150,'left', NULL),
-  (209,2,24,'main',     6,150,'right',NULL),
-  (210,2,12,'main',     7,180,'both', 8),
-  (211,2,26,'cool_down',1,240,'both', NULL),
-  (212,2,27,'cool_down',2,300,'both', NULL),
+  (201,2, 4,'warm_up',  1,'both', 12),
+  (202,2, 6,'warm_up',  2,'both', 10),
+  (203,2, 7,'warm_up',  3,'both', 10),
+  (204,2,10,'main',     1,'both',  4),   -- compensation 12 is 6 exercises later (BR6 warning)
+  (205,2,16,'main',     2,'left',  3),
+  (206,2,16,'main',     3,'right', 3),
+  (207,2,23,'main',     4,'both',  6),
+  (208,2,24,'main',     5,'left',  5),
+  (209,2,24,'main',     6,'right', 5),
+  (210,2,12,'main',     7,'both', 12),
+  (211,2,26,'cool_down',1,'both',  4),
+  (212,2,27,'cool_down',2,'both',  5),
   -- plan 3
-  (301,3, 1,'warm_up',  1,120,'both', 10),
-  (302,3, 2,'warm_up',  2,120,'both', 10),
-  (303,3, 3,'warm_up',  3, 90,'both', 15),
-  (304,3,18,'main',     1,150,'left', NULL),
-  (305,3,18,'main',     2,150,'right',NULL),
-  (306,3,20,'main',     3,120,'both', NULL),
-  (307,3,19,'main',     4,120,'left', NULL),
-  (308,3,19,'main',     5,120,'right',NULL),
-  (309,3,22,'main',     6,120,'left', NULL), -- balance, but not in the first quarter
-  (310,3,22,'main',     7,120,'right',NULL),
-  (311,3,25,'cool_down',1,240,'both', NULL),
+  (301,3, 1,'warm_up',  1,'both', 10),
+  (302,3, 2,'warm_up',  2,'both', 10),
+  (303,3, 3,'warm_up',  3,'both', 15),
+  (304,3,18,'main',     1,'left',  5),
+  (305,3,18,'main',     2,'right', 5),
+  (306,3,20,'main',     3,'both',  4),
+  (307,3,19,'main',     4,'left', 20),
+  (308,3,19,'main',     5,'right',20),
+  (309,3,22,'main',     6,'left',  4),   -- balance, but not in the first quarter
+  (310,3,22,'main',     7,'right', 4),
+  (311,3,25,'cool_down',1,'both',  4),
   -- plan 4 (archived)
-  (401,4,28,'warm_up',  1,120,'both', 10),   -- inactive exercise
-  (402,4, 9,'main',     1,240,'both', NULL),
-  (403,4,27,'cool_down',1,300,'both', NULL),
+  (401,4,28,'warm_up',  1,'both', 20),   -- inactive exercise
+  (402,4, 9,'main',     1,'both',  4),
+  (403,4,27,'cool_down',1,'both',  5),
   -- plan 5 (second coach)
-  (501,5, 2,'warm_up',  1,120,'both', 10),
-  (502,5, 6,'warm_up',  2,120,'both', 10),
-  (503,5,13,'main',     1,180,'left', NULL),
-  (504,5,13,'main',     2,180,'right',NULL),
-  (505,5,24,'main',     3,150,'left', NULL),
-  (506,5,24,'main',     4,150,'right',NULL),
-  (507,5,19,'main',     5,120,'left', NULL),
-  (508,5,19,'main',     6,120,'right',NULL),
-  (509,5,12,'main',     7,180,'both', 8),
-  (510,5,26,'cool_down',1,240,'both', NULL);
+  (501,5, 2,'warm_up',  1,'both', 10),
+  (502,5, 6,'warm_up',  2,'both', 10),
+  (503,5,13,'main',     1,'left',  4),
+  (504,5,13,'main',     2,'right', 4),
+  (505,5,24,'main',     3,'left',  5),
+  (506,5,24,'main',     4,'right', 5),
+  (507,5,19,'main',     5,'left', 20),
+  (508,5,19,'main',     6,'right',20),
+  (509,5,12,'main',     7,'both', 12),
+  (510,5,26,'cool_down',1,'both',  4),
+  -- plan 6 (completed): asymmetric exercises with side 'both' count twice
+  (601,6, 6,'warm_up',  1,'both', 10),   -- 120 s
+  (602,6, 8,'warm_up',  2,'both', 20),   -- 120 s
+  (603,6,11,'main',     1,'both',  2),   -- 2 x 45 s x 2 sides = 180 s
+  (604,6,12,'main',     2,'both', 12),   -- 180 s
+  (605,6,17,'main',     3,'both',  2),   -- 2 x 45 s x 2 sides = 180 s
+  (606,6,26,'cool_down',1,'both',  4),   -- 240 s
+  -- plan 7 (draft)
+  (701,7, 2,'warm_up',  1,'both', 10),
+  (702,7,10,'main',     1,'both',  4);
+
+-- target duration and status: draft -> completed -> reviewed (trigger checks the order)
+UPDATE plan SET target_duration_min = 45 WHERE id IN (1, 2, 3, 4);
+UPDATE plan SET target_duration_min = 30 WHERE id = 5;
+UPDATE plan SET target_duration_min = 20 WHERE id = 6;
+UPDATE plan SET status = 'completed' WHERE id IN (1, 2, 3, 4, 5, 6);
+UPDATE plan SET status = 'reviewed'  WHERE id IN (1, 2, 3, 4, 5);    -- used by sessions below
 
 -- ---------------------------------------------------------------------
 -- 4. Sessions. Each starts 'open' (trigger), receives check-ins, is closed,
---    gets recommendations and feedback, and is marked 'done' with attendance.
+--    gets recommendations and feedback, is marked 'reviewed' once every
+--    recommendation is decided, and 'done' with attendance.
 --    checkin_closed_at is then set to a realistic time for the history.
+--    Creating a session locks its plan (plan items can no longer change).
 -- ---------------------------------------------------------------------
 INSERT INTO session (id, coach_id, plan_id, group_name, starts_at, checkin_token) OVERRIDING SYSTEM VALUE VALUES
   (1, 2, 1, 'Tuesday evening',       pg_temp.t(-14, '17:00'), rpad('test_session_01_', 43, 'x')),
@@ -207,7 +272,7 @@ INSERT INTO session (id, coach_id, plan_id, group_name, starts_at, checkin_token
   (7, 3, 5, 'Morning group',         pg_temp.t(7, '07:00'), rpad('test_session_07_', 43, 'x')),
   (8, 4, 4, 'Old Monday group',      pg_temp.t(-42, '17:00'), rpad('test_session_08_', 43, 'x'));
 
--- check-ins (energy 1–5: 1–2 = low; anonymous; EN/RU)
+-- check-ins (energy 1–5: "low energy" in BR9 = energy <= 2; anonymous; EN/RU)
 INSERT INTO checkin (id, session_id, energy, poor_sleep, language, submitted_at) OVERRIDING SYSTEM VALUE VALUES
   -- S1: 6 check-ins, 7 present
   (101,1,2,true, 'en',pg_temp.t(-14, '16:05')),
@@ -240,7 +305,7 @@ INSERT INTO checkin (id, session_id, energy, poor_sleep, language, submitted_at)
   (803,8,5,false,'ru',pg_temp.t(-42, '16:30'));
 
 INSERT INTO checkin_discomfort (checkin_id, body_area_id) VALUES
-  (101,6),(102,6),(104,4),(106,6),(106,5),          -- S1: knees 3, lower back 1, hips 1
+  (101,6),(102,6),(104,6),(104,4),(106,6),          -- S1: knees 4 of 7 (>= 50 %), lower back 1
   (301,5),(302,5),(302,4),(303,5),(304,4),          -- S3: hips 3, lower back 2
   (401,6),(403,6),                                  -- S4: knees 2 of 4 = exactly 50 %
   (501,3),                                          -- S5: wrists 1 of 2 = 50 %, but one person
@@ -252,20 +317,28 @@ UPDATE session SET checkin_closed_at = starts_at - interval '10 minutes' WHERE i
 
 -- ---------------------------------------------------------------------
 -- 5. Recommendations (representative examples of the engine's output)
+--    Plan 1 counts stato-dynamic as not static for BR5 (2 static of 8 in
+--    the main part = 25 %). A static substitute for a stato-dynamic exercise
+--    would raise the share to 50 % and break BR5, so such a candidate is
+--    rejected by BR11 and a warning is given instead.
 -- ---------------------------------------------------------------------
 INSERT INTO recommendation (id, session_id, plan_item_id, rule_id, form, is_warning, candidate_exercise_id,
                             affected_count, explanation, explanation_source, created_at)
 OVERRIDING SYSTEM VALUE VALUES
-  -- S1: 3 of 7 report knees (< 50 %) -> BR9 alternatives
-  ( 1,1,107, 9,'alternative',false,13,3,'Three of seven participants mentioned knee discomfort. The lying hip flexor stretch targets the same hip flexors with the knee resting on the mat, so offer it next to the deep lunge.','llm',     pg_temp.t(-14, '16:50:05')),
-  ( 2,1,108, 9,'alternative',false,13,3,'3 of 7 participants reported discomfort in the knees. "Lying hip flexor stretch" is offered next to "Deep lunge" for those who need it.','template',pg_temp.t(-14, '16:50:05')),
-  ( 3,1,109, 9,'alternative',false,15,3,'3 of 7 participants reported discomfort in the knees. "Side-lying quad stretch" is offered next to "Standing quad stretch" for those who need it.','template',pg_temp.t(-14, '16:50:05')),
-  ( 4,1,110, 9,'alternative',false,15,3,'3 of 7 participants reported discomfort in the knees. "Side-lying quad stretch" is offered next to "Standing quad stretch" for those who need it.','template',pg_temp.t(-14, '16:50:05')),
+  -- S1: 4 of 7 report knees (>= 50 %, >= 2) -> BR10
+  --   deep lunge (knee load high): the only candidates (lying hip flexor stretch,
+  --   front split) are static and would break BR5 -> BR11 warning
+  ( 1,1,107,11,'replacement',true, NULL,4,'No suitable substitute for "Deep lunge" was found. Consider fewer repetitions, a smaller amplitude or a slower pace.','template',pg_temp.t(-14, '16:50:05')),
+  ( 2,1,108,11,'replacement',true, NULL,4,'No suitable substitute for "Deep lunge" was found. Consider fewer repetitions, a smaller amplitude or a slower pace.','template',pg_temp.t(-14, '16:50:05')),
+  --   standing quad stretch (knee high) -> side-lying quad stretch (knee medium), both sides
+  ( 3,1,109,10,'replacement',false,15,4,'Four of seven participants mentioned knee discomfort. The side-lying quad stretch works the same quadriceps lying on the side, with less load on the knee and no balance needed.','llm',pg_temp.t(-14, '16:50:05')),
+  ( 4,1,110,10,'replacement',false,15,4,'4 of 7 participants reported discomfort in the knees. Replacing "Standing quad stretch" with "Side-lying quad stretch" for the whole group is suggested.','template',pg_temp.t(-14, '16:50:05')),
+  --   child's pose (knee high) -> knees to chest (knee not used)
+  ( 7,1,114,10,'replacement',false,26,4,'4 of 7 participants reported discomfort in the knees. Replacing "Child''s pose" with "Knees to chest" for the whole group is suggested.','template',pg_temp.t(-14, '16:50:05')),
   -- S1: 2 of 7 low energy / poor sleep, balance exercise in the first quarter -> BR9
   ( 5,1,103, 9,'alternative',false, 8,2,'2 of 7 participants reported low energy or poor sleep. "Knee lifts" is offered next to "Leg swings" for those who need it.','template',pg_temp.t(-14, '16:50:05')),
   -- S1: 1 of 7 lower back -> BR9 (candidate via a regression edge)
   ( 6,1,106, 9,'alternative',false,10,1,'One participant mentioned lower-back discomfort. The seated forward fold stretches the same hamstrings with less load on the lower back.','llm',pg_temp.t(-14, '16:50:05')),
-  ( 7,1,114, 9,'alternative',false,26,3,'3 of 7 participants reported discomfort in the knees. "Knees to chest" is offered next to "Child''s pose" for those who need it.','template',pg_temp.t(-14, '16:50:05')),
   -- S3: 3 of 4 present report hips (>= 50 % and >= 2) -> BR10 replacements
   ( 8,3,205,10,'replacement',false,17,3,'Three of the four participants reported hip discomfort. The figure-four stretch works the same piriformis and glutes lying on the back, with much less load on the hip and knee.','llm',pg_temp.t(-9, '16:50:04')),
   ( 9,3,206,10,'replacement',false,17,3,'3 of 4 participants reported discomfort in the hips. Replacing "Pigeon pose" with "Figure-four stretch" for the whole group is suggested.','template',pg_temp.t(-9, '16:50:04')),
@@ -273,18 +346,20 @@ OVERRIDING SYSTEM VALUE VALUES
   (10,3,208,11,'replacement',true, NULL,2,'No suitable substitute for "Seated spinal twist" was found. Consider fewer repetitions, a smaller amplitude or a slower pace.','template',pg_temp.t(-9, '16:50:04')),
   (11,3,209,11,'replacement',true, NULL,2,'No suitable substitute for "Seated spinal twist" was found. Consider fewer repetitions, a smaller amplitude or a slower pace.','template',pg_temp.t(-9, '16:50:04')),
   -- S4: 2 of 4 check-ins (attendance unknown -> base = check-ins) = 50 %, 2 people -> BR10, not decided yet
-  (12,4,107,10,'replacement',false,13,2,'2 of 4 participants reported discomfort in the knees. Replacing "Deep lunge" with "Lying hip flexor stretch" for the whole group is suggested.','template',pg_temp.t(-7, '16:50:03')),
-  (13,4,108,10,'replacement',false,13,2,'2 of 4 participants reported discomfort in the knees. Replacing "Deep lunge" with "Lying hip flexor stretch" for the whole group is suggested.','template',pg_temp.t(-7, '16:50:03')),
+  (12,4,109,10,'replacement',false,15,2,'2 of 4 participants reported discomfort in the knees. Replacing "Standing quad stretch" with "Side-lying quad stretch" for the whole group is suggested.','template',pg_temp.t(-7, '16:50:03')),
+  (13,4,110,10,'replacement',false,15,2,'2 of 4 participants reported discomfort in the knees. Replacing "Standing quad stretch" with "Side-lying quad stretch" for the whole group is suggested.','template',pg_temp.t(-7, '16:50:03')),
   -- S5: 1 of 2 = 50 % but only ONE person -> BR9 alternative, not BR10
   (14,5,306, 9,'alternative',false,21,1,'One participant mentioned wrist discomfort. The wall wrist stretch keeps the same stretch without body weight on the hands.','llm',pg_temp.t(-2, '15:50:02')),
   -- S5: wrist circles have no related exercise -> BR11 warning
   (15,5,303,11,'alternative',true, NULL,1,'No suitable substitute for "Wrist circles" was found. Consider fewer repetitions, a smaller amplitude or a slower pace.','template',pg_temp.t(-2, '15:50:02'));
 
--- decisions (missing row = not decided yet: recommendations 4, 12, 13, 15)
+-- decisions (missing row = not decided yet: recommendations 12, 13, 15).
+-- Warnings are decided too: accepted = the coach applies the general advice.
 INSERT INTO recommendation_decision (recommendation_id, decision, decided_at) VALUES
   ( 1,'accepted',pg_temp.t(-14, '16:53')),
   ( 2,'accepted',pg_temp.t(-14, '16:53')),
-  ( 3,'declined',pg_temp.t(-14, '16:54')),
+  ( 3,'accepted',pg_temp.t(-14, '16:54')),   -- S1: the accepted replacement,
+  ( 4,'accepted',pg_temp.t(-14, '16:54')),   --     both sides (visible in v_session_plan)
   ( 5,'accepted',pg_temp.t(-14, '16:54')),
   ( 6,'accepted',pg_temp.t(-14, '16:55')),
   ( 7,'declined',pg_temp.t(-14, '16:55')),
@@ -298,7 +373,7 @@ INSERT INTO recommendation_decision (recommendation_id, decision, decided_at) VA
 -- 6. Feedback (after the check-in is closed; voluntary)
 -- ---------------------------------------------------------------------
 INSERT INTO feedback (session_id, rating, comment, submitted_at) VALUES
-  (1,5,'The lunge alternative really helped my knee', pg_temp.t(-14, '18:20')),
+  (1,5,'The quad stretch on the mat was much easier on my knee', pg_temp.t(-14, '18:20')),
   (1,4,NULL,                                           pg_temp.t(-14, '18:31')),
   (1,5,'Спасибо, было очень комфортно',                pg_temp.t(-14, '18:47')),
   (1,3,'A bit too fast at the end',                    pg_temp.t(-14, '19:02')),
@@ -307,9 +382,15 @@ INSERT INTO feedback (session_id, rating, comment, submitted_at) VALUES
   (4,4,'Nice pace',                                    pg_temp.t(-7, '18:40'));
 
 -- ---------------------------------------------------------------------
--- 7. Attendance -> 'done'; S4 and S5 stay 'closed', S6 and S7 stay 'open'
+-- 7. Review and attendance
+--    'reviewed' = every recommendation decided (trigger) and the concrete
+--    plan re-checked with BR1–BR8 (backend). S2 and S8 have no
+--    recommendations, so they can be reviewed at once.
+--    S1 stays 'reviewed' (attendance entered, not marked done yet);
+--    S4 and S5 stay 'closed' (undecided recommendations); S6, S7 stay 'open'.
 -- ---------------------------------------------------------------------
-UPDATE session SET status = 'done', participants_present = 7 WHERE id = 1;
+UPDATE session SET status = 'reviewed' WHERE id IN (1, 2, 3, 8);
+UPDATE session SET participants_present = 7 WHERE id = 1;
 UPDATE session SET status = 'done', participants_present = 5 WHERE id = 2;  -- 0 check-ins
 UPDATE session SET status = 'done', participants_present = 4 WHERE id = 3;  -- fewer present than check-ins
 UPDATE session SET status = 'done', participants_present = 6 WHERE id = 8;

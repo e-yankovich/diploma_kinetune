@@ -1,6 +1,6 @@
 # Kinetune — Data Dictionary
 
-DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinetune` · DDL: `db/01_schema.sql`, `db/02_triggers.sql`
+DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinetune` · DDL: `db/01_schema.sql`, `db/02_triggers.sql`, `db/06_plan_and_session_model.sql` (migration 0005)
 
 ---
 
@@ -36,7 +36,7 @@ If the library import later needs validation of raw CSV rows, a `staging` schema
 | Reference | `body_area`, `muscle`, `joint`, `rule` | Seed files (author) | None |
 | Exercise library | `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_relation` | Seed files (author) | None |
 | Access control | `app_user`, `role`, `permission`, `role_permission`, `user_role` | Seed files; admin UI | `app_user`: **personal data** (e-mail, password hash) |
-| Planning | `plan`, `plan_item` | Coach UI | None |
+| Planning | `plan`, `plan_item`; views `v_plan_item`, `v_session_plan` (§7) | Coach UI | None |
 | Sessions and participant input | `session`, `checkin`, `checkin_discomfort`, `feedback` | Coach UI; participant forms (anonymous) | Check-ins: **anonymous health-related answers** (no identifiers stored) |
 | Recommendations | `recommendation`, `recommendation_decision` | Recommendation engine; coach UI | Derived from aggregated check-ins |
 
@@ -75,10 +75,12 @@ If the library import later needs validation of raw CSV rows, a `staging` schema
 | `starting_pose` | `seated`, `standing`, `lying`, `balance` | Starting position. `balance` marks exercises that need balance (BR9: risky in the first quarter of class after low energy or poor sleep; BR11: a candidate must remove this factor). |
 | `side` | `left`, `right`, `both` | Which side a plan item is performed on. `both`: both sides within one item. An asymmetric exercise can also be planned as two items, `left` and `right` (BR7). |
 | `relation_type` | `variation`, `progression` | `variation`: different execution, same difficulty. `progression`: the target exercise is harder; the reverse direction is a regression. |
-| `session_status` | `open`, `closed`, `done` | `open`: check-in link accepts answers. `closed`: the coach closed the check-in (US3.2) and recommendations are generated. `done`: the class took place and attendance has been entered. Allowed transitions: open → closed → done. |
+| `load_level` | `low`, `medium`, `high` | How much an exercise loads a joint (`exercise_joint.load`). BR9 reacts to `medium` and `high`; BR11 needs a candidate with a lower level on the reported joint (§4.2). |
+| `plan_status` | `draft`, `completed`, `reviewed` | `draft`: the coach is building the plan. `completed`: the coach finished building it (a target duration is required). `reviewed`: the BR1–BR8 check was run on the plan and the coach reviewed the result. Allowed transitions: draft → completed → reviewed, and back to `draft` from any status. Any change to the items or the target duration moves a `completed`/`reviewed` plan back to `draft` (**T**). Details in §4.4. |
+| `session_status` | `open`, `closed`, `reviewed`, `done` | `open`: check-in link accepts answers. `closed`: the coach closed the check-in (US3.2) and recommendations are generated. `reviewed`: the coach has decided on every recommendation and the concrete plan was checked again with BR1–BR8. `done`: the class took place and attendance has been entered. Allowed transitions: open → closed → reviewed → done. Details in §4.5. |
 | `recommendation_form` | `alternative`, `replacement` | What the triggered rule called for: BR9 alternative (shown next to the original), BR10 replacement |
 | `explanation_source` | `template`, `llm` | Where the explanation text came from. `template` is also the fallback when the LLM fails (NFR9). |
-| `decision_type` | `accepted`, `declined` | The coach's response to a recommendation |
+| `decision_type` | `accepted`, `declined` | The coach's response to a recommendation. Warnings (BR11) are decided too: `accepted` = the coach applies the general advice, `declined` = not. |
 
 ---
 
@@ -138,11 +140,11 @@ Data quality: exactly 11 rows, ids 1–11 (**Q**, DQ14).
 | `is_symmetric` | boolean | no | | `true` | `false` = asymmetric: performed on each side separately, and both sides must be done in the same phase (BR7) |
 | `required_compensation_id` | integer | yes | FK → `exercise` | | The exercise that must follow this one before the end of class (BR6), e.g. a back extension after a deep forward fold. NULL = no compensation needed. CHECK `required_compensation_id <> id`. Must be an active exercise (**Q**, DQ27). |
 | `difficulty` | smallint | no | | | 1 = easy, 2 = medium, 3 = hard. CHECK `difficulty BETWEEN 1 AND 3`. |
-| `default_duration_sec` | integer | no | | | Suggested duration when added to a plan. CHECK `> 0`. |
+| `rep_duration_sec` | integer | no | | | Seconds for **one** repetition. For a static exercise one repetition = one hold. CHECK `> 0`. Item durations are calculated from it (§7). |
 | `is_active` | boolean | no | | `true` | Soft delete. Inactive exercises stay in old plans and recommendations but cannot be added to new plans or offered as candidates. |
 | `created_at` | timestamptz | no | | `now()` | |
 
-Data quality: every active exercise has at least one primary muscle or primary joint (**Q**, DQ09). New plan items and candidates use active exercises only (**A**, DQ16). Compensation links contain no two-exercise loop, i.e. A requires B and B requires A (**Q**, DQ26).
+Data quality: every active exercise has at least one primary muscle or primary joint (**Q**, DQ09) and, as a warning, at least one primary joint (**Q**, DQ28). New plan items and candidates use active exercises only (**A**, DQ16). Compensation links contain no two-exercise loop, i.e. A requires B and B requires A (**Q**, DQ26).
 
 #### `exercise_muscle`
 Which muscles an exercise works (M:N).
@@ -154,13 +156,22 @@ Which muscles an exercise works (M:N).
 | `is_primary` | boolean | no | | `false` | `true` = main target of the exercise; `false` = secondary |
 
 #### `exercise_joint`
-Which joints an exercise loads (M:N). Same structure as `exercise_muscle`.
+Which joints an exercise involves (M:N), and how much it loads each of them.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `exercise_id` | integer | no | PK, FK → `exercise` | | |
 | `joint_id` | smallint | no | PK, FK → `joint` | | |
-| `is_primary` | boolean | no | | `false` | `true` = the joint carries the main load |
+| `is_primary` | boolean | no | | `false` | `true` = a main joint of the exercise, i.e. what the exercise is "about". Used for sorting, filtering and display in the library. Not used by the rules. |
+| `load` | load_level | no | | | How much the exercise loads this joint: `low`, `medium` or `high`. Used by BR9 and BR11 (below). |
+
+`is_primary` and `load` are independent. Example: a deep lunge has the hip as its primary joint, but it also puts a high load on the knee. Its knee row is `is_primary = false`, `load = 'high'`.
+
+How the rules use `load`:
+- **BR9 / BR10** ("a joint that the exercise loads at a medium or high level"): an exercise needs attention when participants report discomfort in a body area and the exercise has `load` = `medium` or `high` on a joint of that area.
+- **BR11** ("a lower load on the reported joint"): a candidate qualifies if its `load` on that joint is lower than the original exercise's load, or if the candidate does not involve that joint at all (no row).
+
+Both values are assigned by the coach when compiling the library. They are expert estimates, the same approach as `exercise.difficulty` (1–3).
 
 #### `exercise_relation`
 Edges of the exercise graph, used to find substitute candidates (`WITH RECURSIVE`, depth ≤ 2).
@@ -261,7 +272,7 @@ Notes:
 ### 4.4 Planning
 
 #### `plan`
-A reusable class plan (template).
+The **blueprint** of a class, built by the coach. It is checked with BR1–BR8 (the plan check) and reviewed by the coach before it can be used in a session.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
@@ -269,8 +280,20 @@ A reusable class plan (template).
 | `coach_id` | integer | no | FK → `app_user` | | Owner. The user must hold the `coach` role (**T**, DQ21). |
 | `title` | varchar(120) | no | | | CHECK `btrim(title) <> ''` |
 | `notes` | text | yes | | | |
+| `target_duration_min` | smallint | yes | | | Planned length of the class in minutes. BR8 compares it with the calculated plan duration (±5 min). CHECK `BETWEEN 15 AND 120`. May be NULL only while the plan is a draft: CHECK `status = 'draft' OR target_duration_min IS NOT NULL` (DQ29). |
+| `status` | plan_status | no | | `draft` | See below (**T**, DQ29) |
 | `created_at` | timestamptz | no | | `now()` | |
 | `updated_at` | timestamptz | no | | `now()` | Updated by a trigger on every change to the plan or its items (**T**) |
+
+**Plan status.**
+- A new plan starts as `draft` (**T**).
+- `draft` → `completed`: the coach has finished building the plan. A target duration is required.
+- `completed` → `reviewed`: the BR1–BR8 check was run on the blueprint and the coach reviewed its result. The rules are warnings and the coach decides (thesis 2.5), so the database does not enforce the rules themselves. It only enforces the order of the statuses.
+- Any status → `draft`: the coach reopens the plan.
+- Any change to the plan's items (insert, update, delete) or to `target_duration_min` moves a `completed` or `reviewed` plan back to `draft`, because the check has to be run again (**T**). Title and notes do not affect the check and do not change the status.
+- A session can be created only from a `reviewed` plan (**T**, DQ30).
+
+**Lock.** As soon as any session uses a plan (in any session status), the plan is **locked** (**T**, DQ31): its items, `target_duration_min` and `status` can no longer change. The plan of a past or running class therefore never changes afterwards. To change a locked plan, the coach duplicates it with `duplicate_plan()` (§7) and edits the copy, which starts as a new `draft`. `plan_is_locked(plan_id)` tells the UI whether a plan is locked. A locked plan is always `reviewed`, because sessions are created only from reviewed plans.
 
 #### `plan_item`
 One exercise in a plan, at a given position within a phase.
@@ -282,32 +305,35 @@ One exercise in a plan, at a given position within a phase.
 | `exercise_id` | integer | no | FK → `exercise` | | |
 | `phase` | phase | no | | | |
 | `position` | smallint | no | | | Order within the phase, starting at 1. CHECK `position >= 1`. |
-| `duration_sec` | integer | no | | | CHECK `> 0`. Summed for the plan's total duration (BR8). |
 | `side` | side | no | | `both` | Left, right or both. For a symmetric exercise it must be `both` (**T**, DQ25). |
-| `reps_count` | smallint | yes | | | Number of repetitions (per side if `side` is `left` or `right`). NULL for exercises measured only by hold time. CHECK `reps_count > 0`. |
+| `reps_count` | smallint | no | | `1` | Number of repetitions (per side if `side` is `left` or `right`). For a static exercise: number of holds. CHECK `reps_count > 0`. |
+
+The duration of an item is **calculated, not stored** (3NF): `reps_count × exercise.rep_duration_sec`, doubled when the exercise is asymmetric (`is_symmetric = false`) and `side = 'both'` (both sides in one item). The formula exists once, in `item_duration_sec()` (§7). The plan duration for BR8 is the sum over `v_plan_item`.
 
 Keys: UQ (`plan_id`, `phase`, `position`), `DEFERRABLE INITIALLY DEFERRED` so items can be reordered within one transaction.
-Data quality: positions within a phase are continuous 1..n with no gaps (**A**, checked by **Q**, DQ13). Each plan has at least one item in the `main` phase before it can be used in a session (**A**).
+Data quality: positions within a phase are continuous 1..n with no gaps (**A**, checked by **Q**, DQ13). Each plan has at least one item in the `main` phase before it can be used in a session (**A**). Items of a locked plan cannot be inserted, changed or deleted (**T**, DQ31).
 
 ### 4.5 Sessions and participant input
 
 #### `session`
-One class held with a given plan. It owns the check-in link.
+One class. A session is the **concrete plan** of that class: the blueprint (`plan_id`) + the coach's decisions on this session's recommendations + metadata (time, group, check-ins, attendance). Nothing from the plan is copied: the concrete plan is calculated by the view `v_session_plan` (§7). It owns the check-in link.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | integer | no | PK | identity | |
 | `coach_id` | integer | no | FK → `app_user` | | Must be the plan's owner (**T**, DQ08) and hold the `coach` role (**T**, DQ21) |
-| `plan_id` | integer | no | FK → `plan` | | |
+| `plan_id` | integer | no | FK → `plan` | | Must be a `reviewed` plan when the session is created (**T**, DQ30). The plan is locked from then on (DQ31). |
 | `group_name` | varchar(80) | no | | | Free label, e.g. "Tuesday evening". CHECK `btrim(group_name) <> ''`. |
 | `starts_at` | timestamptz | no | | | Planned start of the class |
-| `status` | session_status | no | | `open` | A new session starts as `open`; only forward transitions open → closed → done (**T**) |
+| `status` | session_status | no | | `open` | A new session starts as `open`; only forward transitions open → closed → reviewed → done (**T**, DQ04). See below. |
 | `checkin_token` | varchar(43) | no | UQ | | Random 32-byte value, base64url-encoded, used in the check-in link and QR code. Not guessable and not derived from the id. CHECK `checkin_token ~ '^[A-Za-z0-9_-]{43}$'`. |
 | `checkin_closed_at` | timestamptz | yes | | | Set when the coach closes the check-in. CHECK `(status = 'open') = (checkin_closed_at IS NULL)` (DQ04). |
 | `participants_present` | smallint | yes | | | Entered by the coach after class; the base for K2 and K4. CHECK `>= 0`. Required once `status = 'done'`: CHECK `status <> 'done' OR participants_present IS NOT NULL` (DQ05). |
 | `created_at` | timestamptz | no | | `now()` | |
 
 Index: (`starts_at`) for the session list and per-period KPIs.
+
+**Session status `reviewed`.** The coach moves a session from `closed` to `reviewed` when they have decided on **every** recommendation of the session (warnings are decided too, see `decision_type`) and the concrete plan has been checked again with BR1–BR8. A trigger rejects `reviewed` while any recommendation has no decision (**T**, DQ32); a session with no recommendations can be marked `reviewed` right away. This status is **not stored derived data**: it records a step the coach took (the session review), and the trigger only checks that the step is allowed. Whether the BR1–BR8 re-check was run is checked by the backend, which sets the status only after running it.
 
 #### `checkin`
 One anonymous pre-class answer. There is no link to a person, IP address or device.
@@ -316,13 +342,15 @@ One anonymous pre-class answer. There is no link to a person, IP address or devi
 |---|---|---|---|---|---|
 | `id` | integer | no | PK | identity | |
 | `session_id` | integer | no | FK → `session` | | Accepted only while the session is `open` (**T**, DQ03) |
-| `energy` | smallint | no | | | Self-rated energy, 1 = very low … 5 = very high. CHECK `BETWEEN 1 AND 5`. |
-| `poor_sleep` | boolean | no | | | `true` = slept badly last night |
+| `energy` | smallint | no | | | Self-rated energy, 1 = very low … 5 = very high. CHECK `BETWEEN 1 AND 5`. **"Low energy" in BR9 = `energy <= 2`** (see the note below). |
+| `poor_sleep` | boolean | no | | | `true` = slept badly last night. The participant form defaults it to `false` (the thesis treats the question as optional; not answered = no poor sleep). |
 | `language` | char(2) | no | | | Form language. CHECK `IN ('en', 'ru')`. |
 | `submitted_at` | timestamptz | no | | `now()` | |
 
 Index: (`session_id`) for the per-session aggregates.
 Data quality: the number of check-ins may be higher than `participants_present` (someone checked in but did not come). This is allowed but reported by a check query, because it pushes K2 above 100 % (**Q**, DQ15).
+
+**Low-energy threshold (single source).** The thesis describes energy as low / normal / high; the form uses a 1–5 scale. For BR9, **low energy = `energy <= 2`**. This page is the only place where the threshold is defined. The backend must use one named constant for it (e.g. `LOW_ENERGY_MAX = 2`), never the number `2` written in the rule code.
 
 #### `checkin_discomfort`
 The body areas a participant marked as uncomfortable (0..n per check-in).
@@ -374,7 +402,9 @@ The coach's accept/decline decision, at most one per recommendation (1:1). The a
 | `decision` | decision_type | no | | | |
 | `decided_at` | timestamptz | no | | `now()` | Not earlier than the recommendation's `created_at` (**T**, DQ07) |
 
-A recommendation with no decision row has not been answered yet.
+A recommendation with no decision row has not been answered yet. Warnings (BR11) get a decision like any other recommendation, so a session can be marked `reviewed` only when every row has one (DQ32).
+
+At most one replacement can be accepted per plan item and session (**T**, DQ33), so the concrete plan has exactly one exercise per item. Accepting an alternative does not change the concrete plan; it is shown next to the original.
 
 ---
 
@@ -398,11 +428,11 @@ The rule: deleting a session removes everything collected for it (supports data 
 | `user_role.granted_by` | `app_user` | SET NULL | The assignment stays valid if the granting admin is removed |
 | `plan_item.plan_id` | `plan` | CASCADE | Items belong to the plan |
 | `plan_item.exercise_id` | `exercise` | RESTRICT | Use `is_active = false` instead |
-| `session.plan_id` | `plan` | RESTRICT | Keeps session history interpretable |
+| `session.plan_id` | `plan` | RESTRICT | Keeps session history interpretable; the plan is also locked (DQ31) |
 | `checkin.session_id`, `feedback.session_id`, `recommendation.session_id` | `session` | CASCADE | Session data is deleted together with the session |
 | `checkin_discomfort.checkin_id` | `checkin` | CASCADE | |
 | `checkin_discomfort.body_area_id` | `body_area` | RESTRICT | |
-| `recommendation.plan_item_id` | `plan_item` | RESTRICT | Keeps history (see §7) |
+| `recommendation.plan_item_id` | `plan_item` | RESTRICT | Keeps history. Items of a plan with sessions cannot be deleted anyway (plan lock, DQ31). |
 | `recommendation.rule_id` | `rule` | RESTRICT | |
 | `recommendation.candidate_exercise_id` | `exercise` | RESTRICT | |
 | `recommendation_decision.recommendation_id` | `recommendation` | CASCADE | 1:1 dependent |
@@ -418,7 +448,7 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ01 | Consistency | `recommendation.plan_item_id` belongs to the plan of `recommendation.session_id` | T | error |
 | DQ02 | Validity | A candidate differs from the exercise it replaces | T | error |
 | DQ03 | Timeliness | Check-ins (and their discomfort rows) are accepted only while the session is `open` | T | error |
-| DQ04 | Consistency | `checkin_closed_at` is set exactly when the status is not `open` | C | error |
+| DQ04 | Consistency | `checkin_closed_at` is set exactly when the status is not `open` (C); a new session starts `open` and the status moves only open → closed → reviewed → done (T) | C + T | error |
 | DQ05 | Completeness | `participants_present` is filled once the session is `done` | C | error |
 | DQ06 | Timeliness | Recommendations are created only after the check-in is closed | A | error |
 | DQ07 | Consistency | A decision is not earlier than its recommendation | T | error |
@@ -442,5 +472,46 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ25 | Consistency | A plan item of a symmetric exercise has `side = 'both'` | T | error |
 | DQ26 | Validity | Compensation links have no two-exercise loop (A requires B and B requires A) | Q | error (library import fails) |
 | DQ27 | Validity | A required compensation exercise is active | Q | error (library import fails) |
+| DQ28 | Completeness | Every active exercise has at least one primary joint | Q | warning |
+| DQ29 | Consistency | A new plan starts as `draft`; plan status moves draft → completed → reviewed (or back to `draft`); a plan that is not a draft has `target_duration_min`; a change to items or target moves it back to `draft` | C + T | error |
+| DQ30 | Consistency | A session is created only from a `reviewed` plan (T); a plan used by a session is `reviewed` (Q) | T + Q | error |
+| DQ31 | Immutability | A plan used by any session is locked: its items, target duration and status do not change | T | error |
+| DQ32 | Completeness | A session becomes `reviewed` only when every recommendation has a decision (T); sessions reviewed or done before migration 0005 with undecided recommendations are reported (Q) | T + Q | error (T) / warning (Q) |
+| DQ33 | Consistency | At most one accepted replacement per plan item and session | T | error |
 
 Check queries (Q) are kept in Git next to the migrations and run (a) in the automated tests, (b) after every library import, and (c) before the pilot.
+
+---
+
+## 7. Calculated data: views and functions
+
+Derived values are calculated when they are read, not stored (3NF). Each formula exists once, in the database, so the backend does not repeat it.
+
+| Object | Kind | Returns | Used for |
+|---|---|---|---|
+| `item_duration_sec(reps_count, rep_duration_sec, is_symmetric, side)` | function, IMMUTABLE | Item duration in seconds: `reps_count × rep_duration_sec`, × 2 if `is_symmetric = false` and `side = 'both'` | The only implementation of the duration formula; used by both views |
+| `v_plan_item` | view | Items of a **blueprint**: `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `exercise_id`, `side`, `reps_count`, `duration_sec` | Plan check BR1–BR8 on the blueprint (plan review); plan duration for BR8 = `sum(duration_sec)` |
+| `v_session_plan` | view | Items of the **concrete plan of a session**: `session_id`, `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `original_exercise_id`, `exercise_id` (effective, after accepted replacements), `replacement_recommendation_id`, `alternative_exercise_ids` (accepted alternatives, shown next to the original), `side`, `reps_count`, `duration_sec` (of the effective exercise) | Session view (US5.2); BR1–BR8 check on the concrete plan (session review) |
+| `plan_is_locked(plan_id)` | function | `true` when any session uses the plan | Lock trigger (DQ31); the UI shows a locked plan as read-only and offers "duplicate" |
+| `duplicate_plan(plan_id, title = NULL)` | function | Id of a new `draft` plan with the same coach, notes, target duration and items. Default title: `<title> (copy)`. Raises `P0002` if the plan does not exist. | Changing a locked plan (T9). Runs with the caller's rights; the API checks that the caller owns the plan. |
+
+**How the concrete plan is built** (`v_session_plan`), per plan item of the session's plan, in class order:
+- an accepted **replacement** (BR10) swaps the item's exercise for the candidate;
+- accepted **alternatives** (BR9) are listed next to the original; the item keeps its exercise;
+- **warnings** (BR11) and declined recommendations change nothing.
+
+`seq` is the position of the item in the whole class (1..n over phase, then position). BR6 ("more than five exercises later") and BR9 ("the first quarter of the class") use it.
+
+**One plan check for both lists (note for the backend).** The BR1–BR8 check is written once, as a function over a **list of items** (exercise, phase, position, side, duration). The backend runs the same function on `v_plan_item` (blueprint, plan review) and on `v_session_plan` with `exercise_id` (concrete plan, session review). It never reads durations from anywhere else.
+
+**Library changes.** Durations and the plan check are calculated from the current exercise library (`rep_duration_sec`, `is_symmetric`, `mode`). If the author changes an exercise, the calculated values of old plans and sessions change too. This is intended: the library is the single source of exercise data.
+
+---
+
+## 8. KPI notes
+
+| KPI | Calculated from | Note |
+|---|---|---|
+| K2 | `count(checkin) / participants_present` per session | Base: `participants_present`; if it is NULL or lower than the number of check-ins, the number of check-ins (thesis 2.5) |
+| K3 | `count(decision = 'accepted') / count(decisions)` | Counted over **decided** recommendations only (rows in `recommendation_decision`); warnings are included, as in the thesis (every suggestion is accepted or declined). Undecided recommendations are left out. Target ≥ 60 %; absolute numbers if fewer than 10. |
+| K4 | `count(feedback) / participants_present` per session | Same base as K2. Target ≥ 15 % |

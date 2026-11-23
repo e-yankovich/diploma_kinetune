@@ -94,5 +94,28 @@ SELECT check_id, severity, detail FROM (
       FROM exercise a JOIN exercise b ON b.id = a.required_compensation_id
      WHERE a.is_active AND NOT b.is_active
 
+    UNION ALL
+    SELECT 'DQ28', 'warning', format('exercise %s "%s" has no primary joint', e.id, e.name)
+      FROM exercise e
+     WHERE e.is_active
+       AND NOT EXISTS (SELECT 1 FROM exercise_joint j WHERE j.exercise_id = e.id AND j.is_primary)
+
+    UNION ALL
+    -- a plan used by a session must have been reviewed (it is locked since then)
+    SELECT 'DQ30', 'error', format('plan %s is used by session(s) but has status %s', p.id, p.status)
+      FROM plan p
+     WHERE p.status <> 'reviewed'
+       AND EXISTS (SELECT 1 FROM session s WHERE s.plan_id = p.id)
+
+    UNION ALL
+    -- only possible for sessions closed before migration 0005
+    SELECT 'DQ32', 'warning', format('session %s is %s but %s recommendation(s) have no decision',
+                                     s.id, s.status, count(r.id))
+      FROM session s
+      JOIN recommendation r ON r.session_id = s.id
+     WHERE s.status::text IN ('reviewed', 'done')
+       AND NOT EXISTS (SELECT 1 FROM recommendation_decision d WHERE d.recommendation_id = r.id)
+     GROUP BY s.id
+
 ) checks
 ORDER BY severity, check_id, detail;

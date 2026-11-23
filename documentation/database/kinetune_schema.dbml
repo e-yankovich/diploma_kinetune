@@ -37,9 +37,22 @@ Enum relation_type {
 }
 
 Enum session_status {
-  open     // check-in link active
-  closed   // coach closed check-in (US3.2), recommendations generated
-  done     // class held, attendance entered
+  open      // check-in link active
+  closed    // coach closed check-in (US3.2), recommendations generated
+  reviewed  // every recommendation decided, concrete plan re-checked (BR1–BR8)
+  done      // class held, attendance entered
+}
+
+Enum plan_status {
+  draft      // being built; any change returns here
+  completed  // built; target_duration_min required
+  reviewed   // BR1–BR8 check run and reviewed; sessions only from here
+}
+
+Enum load_level {
+  low
+  medium     // BR9: medium/high load on a reported joint triggers
+  high
 }
 
 Enum recommendation_form {
@@ -96,7 +109,7 @@ Table exercise {
   is_symmetric boolean [not null, default: true, note: 'false = asymmetric, done per side (BR7)']
   required_compensation_id integer [note: 'exercise that must follow it (BR6); CHECK <> id']
   difficulty smallint [not null, note: 'CHECK 1..3']
-  default_duration_sec integer [not null, note: 'CHECK > 0']
+  rep_duration_sec integer [not null, note: 'seconds for ONE repetition (static: one hold); CHECK > 0']
   is_active boolean [not null, default: true]
   created_at timestamptz [not null, default: `now()`]
 }
@@ -113,10 +126,12 @@ Table exercise_muscle {
 Table exercise_joint {
   exercise_id integer [not null]
   joint_id smallint [not null]
-  is_primary boolean [not null, default: false]
+  is_primary boolean [not null, default: false, note: 'main joint of the exercise; library sorting/filtering/display']
+  load load_level [not null, note: 'BR9: medium/high triggers; BR11: candidate needs a lower load or no row']
   indexes {
     (exercise_id, joint_id) [pk]
   }
+  Note: 'is_primary and load are independent: a lunge is about the hip (primary) but loads the knee highly (not primary, load high)'
 }
 
 Table exercise_relation {
@@ -190,8 +205,12 @@ Table plan {
   coach_id integer [not null, note: 'app_user with role coach']
   title varchar(120) [not null]
   notes text
+  target_duration_min smallint [note: "class length for BR8; CHECK 15..120; NOT NULL unless status = 'draft'"]
+  status plan_status [not null, default: 'draft', note: 'trigger: draft -> completed -> reviewed; any change -> draft']
   created_at timestamptz [not null, default: `now()`]
   updated_at timestamptz [not null, default: `now()`]
+  Note: '''Blueprint of a class. Locked (items, target, status) as soon as any session uses it;
+change a locked plan through duplicate_plan(plan_id).'''
 }
 
 Table plan_item {
@@ -200,12 +219,14 @@ Table plan_item {
   exercise_id integer [not null]
   phase phase [not null]
   position smallint [not null, note: 'CHECK >= 1; continuous 1..n per phase']
-  duration_sec integer [not null, note: 'CHECK > 0']
   side side [not null, default: 'both', note: "symmetric exercise -> 'both'"]
-  reps_count smallint [note: 'NULL for holds; CHECK > 0']
+  reps_count smallint [not null, default: 1, note: 'per side if left/right; holds for static; CHECK > 0']
   indexes {
     (plan_id, phase, position) [unique, note: 'DEFERRABLE INITIALLY DEFERRED (reordering)']
   }
+  Note: '''Duration is calculated, not stored: item_duration_sec() =
+reps_count x exercise.rep_duration_sec, x2 if asymmetric and side = both.
+Read through view v_plan_item (blueprint) or v_session_plan (concrete plan of a session).'''
 }
 
 // ───────────── Sessions & participant input ─────────────
@@ -213,10 +234,10 @@ Table plan_item {
 Table session {
   id integer [pk, increment]
   coach_id integer [not null, note: 'app_user with role coach; = plan owner']
-  plan_id integer [not null]
+  plan_id integer [not null, note: 'trigger: plan must be reviewed; the plan is locked from then on']
   group_name varchar(80) [not null, note: "CHECK btrim <> ''"]
   starts_at timestamptz [not null]
-  status session_status [not null, default: 'open', note: 'trigger: new session starts open; only open -> closed -> done']
+  status session_status [not null, default: 'open', note: 'trigger: new session starts open; open -> closed -> reviewed (all recommendations decided) -> done']
   checkin_token varchar(43) [unique, not null, note: "random 32 bytes base64url; CHECK ~ '^[A-Za-z0-9_-]{43}$'"]
   checkin_closed_at timestamptz [note: "CHECK (status = 'open') = (checkin_closed_at IS NULL)"]
   participants_present smallint [note: "entered after class; base for K2/K4; CHECK >= 0; NOT NULL when status = 'done'"]
@@ -224,6 +245,7 @@ Table session {
   indexes {
     starts_at
   }
+  Note: 'Concrete plan of one class = plan + decisions on its recommendations; calculated by view v_session_plan (no copy)'
 }
 
 Table checkin {
@@ -283,8 +305,18 @@ Table recommendation_decision {
   recommendation_id integer [pk]
   decision decision_type [not null]
   decided_at timestamptz [not null, default: `now()`]
-  Note: 'Accept rate -> K3'
+  Note: '''Warnings are decided too. K3 = accepted / decided.
+Trigger: at most one accepted replacement per plan item and session.'''
 }
+
+// ───────────── Views and functions (calculated, not stored) ─────────────
+// item_duration_sec(reps_count, rep_duration_sec, is_symmetric, side) -> integer
+// plan_is_locked(plan_id) -> boolean            (any session uses the plan)
+// duplicate_plan(plan_id, title = NULL) -> new draft plan id
+// v_plan_item:    plan_id, plan_item_id, seq, phase, position, exercise_id, side, reps_count, duration_sec
+// v_session_plan: session_id, plan_id, plan_item_id, seq, phase, position, original_exercise_id,
+//                 exercise_id (after accepted replacement), replacement_recommendation_id,
+//                 alternative_exercise_ids (accepted alternatives), side, reps_count, duration_sec
 
 
 // ───────────── Relationships (ON DELETE behaviour) ─────────────

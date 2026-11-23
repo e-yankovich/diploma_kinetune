@@ -49,19 +49,52 @@ BEGIN
     RAISE NOTICE 'PASS  app_read can read every table';
 END $$;
 
+-- ---------- every view is readable by app_read ----------
+DO $$
+DECLARE v text;
+BEGIN
+    SELECT string_agg(c.relname, ', ') INTO v
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'kinetune' AND c.relkind = 'v'
+       AND NOT has_table_privilege('app_read', c.oid, 'SELECT');
+    IF v IS NOT NULL THEN RAISE EXCEPTION 'FAIL  app_read cannot read view(s): %', v; END IF;
+    RAISE NOTICE 'PASS  app_read can read every view';
+END $$;
+
+-- ---------- no function is executable by PUBLIC ----------
+DO $$
+DECLARE v text;
+BEGIN
+    SELECT string_agg(p.proname, ', ') INTO v
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'kinetune'
+       AND has_function_privilege('public', p.oid, 'EXECUTE');
+    IF v IS NOT NULL THEN RAISE EXCEPTION 'FAIL  PUBLIC can execute: %', v; END IF;
+    RAISE NOTICE 'PASS  no kinetune function is executable by PUBLIC';
+END $$;
+
 -- =========================== kinetune_api ===========================
 SET ROLE kinetune_api;
 SELECT pg_temp.expect_ok  ('read password hash for login',          $q$SELECT password_hash FROM app_user WHERE email = 'laura@kinetune.test'$q$);
 SELECT pg_temp.expect_ok  ('submit a check-in (open session 6)',    $q$INSERT INTO checkin (session_id, energy, poor_sleep, language) VALUES (6, 3, false, 'en')$q$);
-SELECT pg_temp.expect_ok  ('LLM enrichment of an explanation',      $q$UPDATE recommendation SET explanation = 'LLM text', explanation_source = 'llm' WHERE id = 4$q$);
+SELECT pg_temp.expect_ok  ('LLM enrichment of an explanation',      $q$UPDATE recommendation SET explanation = 'LLM text', explanation_source = 'llm' WHERE id = 13$q$);
 SELECT pg_temp.expect_ok  ('record a decision',                     $q$INSERT INTO recommendation_decision (recommendation_id, decision) VALUES (12, 'accepted')$q$);
 SELECT pg_temp.expect_ok  ('create a plan',                         $q$INSERT INTO plan (coach_id, title) VALUES (2, 'New plan')$q$);
+SELECT pg_temp.expect_ok  ('set target duration and status',        $q$UPDATE plan SET target_duration_min = 40, status = 'completed' WHERE id = 7$q$);
+SELECT pg_temp.expect_ok  ('edit an item of an unlocked plan',      $q$UPDATE plan_item SET reps_count = 12 WHERE id = 701$q$);
+SELECT pg_temp.expect_ok  ('read the concrete plan of a session',   $q$SELECT * FROM v_session_plan WHERE session_id = 1$q$);
+SELECT pg_temp.expect_ok  ('read plan items with durations',        $q$SELECT * FROM v_plan_item WHERE plan_id = 1$q$);
+SELECT pg_temp.expect_ok  ('duplicate a locked plan',               $q$SELECT duplicate_plan(1)$q$);
+SELECT pg_temp.expect_ok  ('decide the last recommendation of S4',  $q$INSERT INTO recommendation_decision (recommendation_id, decision) VALUES (13, 'declined')$q$);
+SELECT pg_temp.expect_ok  ('mark a session reviewed (all decided)', $q$UPDATE session SET status = 'reviewed' WHERE id = 4$q$);
 SELECT pg_temp.expect_ok  ('delete a session (cascades to its data)', $q$DELETE FROM session WHERE id = 2$q$);
 SELECT pg_temp.expect_fail('edit a participant''s check-in',        $q$UPDATE checkin SET energy = 5 WHERE id = 101$q$);
 SELECT pg_temp.expect_fail('delete feedback',                       $q$DELETE FROM feedback$q$);
 SELECT pg_temp.expect_fail('change a decision',                     $q$UPDATE recommendation_decision SET decision = 'declined' WHERE recommendation_id = 1$q$);
 SELECT pg_temp.expect_fail('change affected_count (column not granted)', $q$UPDATE recommendation SET affected_count = 99 WHERE id = 1$q$);
-SELECT pg_temp.expect_fail('edit the exercise library',             $q$INSERT INTO exercise (name, mode, starting_pose, difficulty, default_duration_sec) VALUES ('X','dynamic','lying',1,60)$q$);
+SELECT pg_temp.expect_fail('edit the exercise library',             $q$INSERT INTO exercise (name, mode, starting_pose, difficulty, rep_duration_sec) VALUES ('X','dynamic','lying',1,60)$q$);
+SELECT pg_temp.expect_fail('change a joint load level',             $q$UPDATE exercise_joint SET load = 'low' WHERE exercise_id = 14$q$);
+SELECT pg_temp.expect_fail('views are read-only',                   $q$DELETE FROM v_plan_item$q$);
 SELECT pg_temp.expect_fail('edit rule texts',                       $q$UPDATE rule SET explanation = 'x' WHERE id = 9$q$);
 SELECT pg_temp.expect_fail('edit permissions',                      $q$INSERT INTO role_permission VALUES (1, 10)$q$);
 SELECT pg_temp.expect_fail('create a table (DDL)',                  $q$CREATE TABLE kinetune.hack (id int)$q$);
@@ -72,6 +105,9 @@ SELECT pg_temp.expect_fail('disable a trigger',                     $q$ALTER TAB
 -- business rules still apply to the backend (SECURITY DEFINER triggers)
 SELECT pg_temp.expect_fail('DQ03 check-in into a closed session',   $q$INSERT INTO checkin (session_id, energy, poor_sleep, language) VALUES (1, 3, false, 'en')$q$);
 SELECT pg_temp.expect_fail('DQ22 remove the last admin',            $q$DELETE FROM user_role WHERE user_id = 1 AND role_id = 2$q$);
+SELECT pg_temp.expect_fail('DQ31 edit an item of a locked plan',    $q$UPDATE plan_item SET reps_count = 1 WHERE id = 101$q$);
+SELECT pg_temp.expect_fail('DQ30 session from a non-reviewed plan', $q$INSERT INTO session (coach_id, plan_id, group_name, starts_at, checkin_token) VALUES (2, 6, 'G', now(), repeat('q', 43))$q$);
+SELECT pg_temp.expect_fail('DQ32 reviewed with an undecided recommendation', $q$UPDATE session SET status = 'reviewed' WHERE id = 5$q$);
 -- password policy
 SELECT pg_temp.expect_fail('store a plain-text password',           $q$INSERT INTO app_user (email, password_hash, display_name) VALUES ('p@x.test', 'Secret123!', 'P')$q$);
 SELECT pg_temp.expect_fail('store an MD5 hash',                     $q$INSERT INTO app_user (email, password_hash, display_name) VALUES ('m@x.test', md5('Secret123!'), 'M')$q$);
@@ -90,6 +126,9 @@ SELECT pg_temp.expect_fail('read password hashes',                  $q$SELECT pa
 SELECT pg_temp.expect_fail('SELECT * from app_user',                $q$SELECT * FROM app_user$q$);
 SELECT pg_temp.expect_fail('insert a check-in',                     $q$INSERT INTO checkin (session_id, energy, poor_sleep, language) VALUES (6, 3, false, 'en')$q$);
 SELECT pg_temp.expect_fail('update a plan',                         $q$UPDATE plan SET title = 'x'$q$);
+SELECT pg_temp.expect_ok  ('read the concrete plan of a session',   $q$SELECT * FROM v_session_plan$q$);
+SELECT pg_temp.expect_ok  ('calculate an item duration',            $q$SELECT item_duration_sec(4, 45, false, 'both')$q$);
+SELECT pg_temp.expect_fail('duplicate a plan',                      $q$SELECT duplicate_plan(1)$q$);
 RESET ROLE;
 
 -- =========================== app_admin (maintenance) ===========================

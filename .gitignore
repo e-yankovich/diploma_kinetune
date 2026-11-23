@@ -227,3 +227,8 @@ __marimo__/
 
 # JetBrains IDEs
 .idea/
+
+#requirements
+requirements/
+
+CLAUDE.md

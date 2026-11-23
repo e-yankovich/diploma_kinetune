@@ -11,7 +11,7 @@ Requirements: Docker with Docker Compose v2.
 cd deployment                 # the Docker Compose stack lives here
 cp .env.example .env          # then set real passwords (see "Secrets" below)
 docker compose up -d          # 1) starts PostgreSQL 18  2) applies migrations
-docker compose logs migrate   # "Running upgrade ... -> 0004, Password policy ..."
+docker compose logs migrate   # "Running upgrade ... -> 0005, Plan and session model ..."
 ```
 
 Optionally load the demo/test dataset (coaches, a demo exercise library, sessions,
@@ -51,12 +51,13 @@ Each migration runs in one transaction: if it fails, nothing is changed.
 
 Migrations applied:
 
-| Rev | Contents |
-|---|---|
-| 0001 | schema: types, tables, constraints, indexes (`01`), triggers (`02`) |
-| 0002 | reference data: roles, permissions, body areas, muscles, joints, rules BR1–BR11 (`03`) |
-| 0003 | group roles `app_read`/`app_write`/`app_admin`, privileges, SECURITY DEFINER triggers (`04`) |
-| 0004 | password policy: `app_user.password_hash` must be an argon2id PHC string (`05`) |
+| Rev | Contents                                                                                                                                                                                           |
+|---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0001 | schema: types, tables, constraints, indexes (`01`), triggers (`02`)                                                                                                                                |
+| 0002 | reference data: roles, permissions, body areas, muscles, joints, rules BR1–BR11 (`03`)                                                                                                             |
+| 0003 | group roles `app_read`/`app_write`/`app_admin`, privileges, SECURITY DEFINER triggers (`04`)                                                                                                       |
+| 0004 | password policy: `app_user.password_hash` mnust be an argon2id PHC string (`05`)                                                                                                                   |
+| 0005 | plan and session model: joint load level, calculated durations, plan status and target duration, session status `reviewed`, plan lock, `v_plan_item` / `v_session_plan`, `duplicate_plan()` (`06`) |
 
 Useful commands (run from `deployment/`):
 
@@ -97,10 +98,11 @@ deployment/
     03_reference_data.sql    reference data (roles, permissions, areas, rules ...)
     04_roles_privileges.sql  group roles, grants, SECURITY DEFINER triggers
     05_password_policy.sql   argon2id password-hash constraint
+    06_plan_and_session_model.sql  plan/session statuses, plan lock, duration views
     alembic.ini              migration tool configuration
     migrations/
       env.py                 connection from environment variables
-      versions/0001..0004    one migration per SQL file above
+      versions/0001..0005    one migration per SQL file above (0001 uses 01 + 02)
     init/                    run once on an empty volume (first start only)
       10_login_roles.sh      creates login roles with passwords from .env
       login_roles.psql       the role DDL it executes (passwords, never in Git)
@@ -125,7 +127,7 @@ With the stack running, from `deployment/` (the smoke test creates and drops its
 scratch database, so it connects as the **superuser**):
 
 ```bash
-# DDL: constraints and triggers  (expected: 31 lines PASS, no FAIL)
+# DDL: constraints and triggers  (expected: 64 lines PASS, no FAIL)
 PGHOST=localhost PGPORT=${DB_PORT} PGUSER=postgres PGPASSWORD=... db/tests/run_ddl_test.sh
 
 # Roles and privileges  (run after migrations + test data; expected: no FAIL)
