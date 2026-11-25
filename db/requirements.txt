@@ -1,3 +1,4 @@
 alembic==1.20.1
 SQLAlchemy==2.1.9
 psycopg[binary]==3.3.9
+openpyxl==3.1.5

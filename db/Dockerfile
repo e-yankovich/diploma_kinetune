@@ -13,6 +13,8 @@ COPY alembic.ini \
      01_schema.sql 02_triggers.sql 03_reference_data.sql \
      04_roles_privileges.sql 05_password_policy.sql ./
 COPY migrations ./migrations
+# library import script; the workbook itself is mounted at run time (/data)
+COPY library/import_library.py ./library/
 
 # run without root privileges
 RUN useradd --system --no-create-home migrator

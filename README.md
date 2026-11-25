@@ -14,6 +14,15 @@ docker compose up -d          # 1) starts PostgreSQL 18  2) applies migrations
 docker compose logs migrate   # "Running upgrade ... -> 0004, Password policy ..."
 ```
 
+Load the exercise library from the author's spreadsheet (`db/library/kinetune_library.xlsx`;
+one transaction, all problems reported together, see
+[`docs/database/library_import.md`](docs/database/library_import.md)):
+
+```bash
+docker compose --profile import run --rm import-library /data/kinetune_library.xlsx --dry-run
+docker compose --profile import run --rm import-library
+```
+
 Optionally load the demo/test dataset (coaches, a demo exercise library, sessions,
 check-ins and recommendations). It refuses to run if the database already has users:
 
@@ -107,7 +116,9 @@ db/
     login_roles.psql         the role DDL it executes (passwords, never in Git)
   seed/
     test_data.sql            demo/test dataset (loaded via the seed-test service)
-  library/                   exercise library export (to be added)
+  library/
+    import_library.py        library import: validates the sheet, derives the graphs
+    kinetune_library.xlsx    the author's library workbook (input of the import)
   checks/
     data_quality_checks.sql  queries that return rows violating DQ rules
   tests/

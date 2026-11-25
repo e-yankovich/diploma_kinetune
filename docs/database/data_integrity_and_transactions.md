@@ -335,7 +335,7 @@ BEGIN;
 COMMIT;
 ```
 
-The import is all or nothing, so a half-loaded library can never be used by the recommendation engine.
+The import is all or nothing, so a half-loaded library can never be used by the recommendation engine. Sheet format, validation and graph derivation: `library_import.md`.
 
 **Schema migrations.** PostgreSQL supports transactional DDL, so Alembic runs each migration in a transaction. A migration that fails halfway (e.g. a new CHECK that existing data violates) is rolled back completely, and the schema stays at the previous version. The current version is stored in `alembic_version`.
 

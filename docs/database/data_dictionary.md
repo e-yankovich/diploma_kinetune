@@ -23,9 +23,9 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 
 **Layers.** The database has one layer: the operational core (OLTP). The application writes to it directly, and there are no raw, staging or analytical copies of the data. Reasons:
 
-- The volume is small (one coach, about 50 exercises, a few hundred sessions per year at most).
+- The volume is small (one coach, about 100 exercises, a few hundred sessions per year at most).
 - All reporting (KPIs K1–K4) can be computed from the same tables with views, so a separate analytical layer is not justified.
-- Reference data is loaded by a migration (SQL in Git). The exercise library is loaded from the author's spreadsheet export by the library import script (`db/library/`), which validates every row before it writes anything. These files act as the "source" layer outside the database.
+- Reference data is loaded by a migration (SQL in Git). The exercise library is loaded from the author's spreadsheet export by the library import script (`db/library/`, see `library_import.md`), which validates every row before it writes anything. These files act as the "source" layer outside the database.
 
 **Subject areas** (logical grouping within the core):
 
@@ -46,12 +46,12 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 | `muscle` | 28 |
 | `joint` | 11 |
 | `rule` | 11 |
-| `exercise` | 30–50 |
-| `exercise_muscle`, `exercise_joint` | 100–200 each |
-| `exercise_family` | 10–25 |
-| `exercise_family_member` | 40–80 |
-| `exercise_compensation` | 20–60 |
-| `exercise_relation` | 50–150 |
+| `exercise` | ~100 (99 in the current library) |
+| `exercise_muscle`, `exercise_joint` | ~230 each |
+| `exercise_family` | ~20 |
+| `exercise_family_member` | ~150 |
+| `exercise_compensation` | ~70 |
+| `exercise_relation` | ~850 (about 600 variations, 250 progressions) |
 | `app_user` | 1–2 (the author can hold both roles in one account) |
 | `role` | 2 (3 when `client` is added) |
 | `permission` | 10–15 |

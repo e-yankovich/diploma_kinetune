@@ -58,6 +58,31 @@ services:
         condition: service_healthy
     command: ["alembic", "upgrade", "head"]
 
+  # Exercise library import — NOT part of the default stack. Run it after
+  # the migrations, from the repository root:
+  #   docker compose --profile import run --rm import-library               # import
+  #   docker compose --profile import run --rm import-library /data/kinetune_library.xlsx --dry-run
+  # One transaction: on any problem nothing is written (docs/database/library_import.md).
+  import-library:
+    build: ./db
+    profiles: ["import"]
+    restart: "no"
+    environment:
+      # libpq variables (no password in a URL); the owner role has the
+      # app_admin rights the import needs
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      PGUSER: kinetune_migrator
+      PGPASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./db/library:/data:ro
+    entrypoint: ["python", "library/import_library.py"]
+    command: ["/data/kinetune_library.xlsx"]
+
   # Test/demo data — NOT part of the default stack. Load it explicitly with:
   #   docker compose --profile test run --rm seed-test
   # Guarded: it refuses to run on a database that already has users.
