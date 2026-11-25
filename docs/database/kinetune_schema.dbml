@@ -37,8 +37,8 @@ Enum side {
 }
 
 Enum relation_type {
-  variation    // same level, different execution (undirected)
-  progression  // from -> to is harder by >= 1 attribute, easier by none (reverse = regression)
+  variation    // same movement, another execution, any level (undirected)
+  progression  // from -> to is a harder version (reverse = regression); a pair may have both
 }
 
 Enum session_status {
@@ -179,7 +179,7 @@ Table exercise_relation {
   is_directed boolean [not null, default: true]
   is_manual boolean [not null, default: false, note: 'false = derived on import (families + attributes); true = manual progression']
   indexes {
-    (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`) [unique, name: 'uq_exercise_relation_pair', note: 'one edge per pair (DQ36)']
+    (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`, type) [unique, name: 'uq_exercise_relation_pair_type', note: 'one edge of each type per pair; no progressions both ways (DQ36)']
     (from_exercise_id, type) [note: 'recursive candidate search']
     (to_exercise_id) [note: 'undirected edges are also traversed backwards']
   }

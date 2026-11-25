@@ -282,11 +282,17 @@ SELECT pg_temp.expect_fail('relation not self',
   $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type) VALUES (1,1,'variation')$q$);
 SELECT pg_temp.expect_fail('undirected edge stored with from < to',
   $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (4,1,'variation',false)$q$);
-SELECT pg_temp.expect_fail('DQ36 a variation pair cannot also be a progression',
+-- a pair can be in both graphs: half kneel lunge (3) and deep lunge (2) are
+-- variations, and the deep lunge is also the harder version (progression 3 -> 2)
+INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (3, 2, 'progression', true);
+SELECT pg_temp.expect_true('a pair can be both a variation and a progression',
+  (SELECT count(*) = 2 FROM exercise_relation WHERE LEAST(from_exercise_id, to_exercise_id) = 2
+                                               AND GREATEST(from_exercise_id, to_exercise_id) = 3));
+SELECT pg_temp.expect_fail('DQ36 no progressions in both directions (2 -> 3 next to 3 -> 2)',
   $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (2,3,'progression',true)$q$);
-SELECT pg_temp.expect_fail('DQ36 no reverse progression (two-exercise cycle)',
+SELECT pg_temp.expect_fail('DQ36 no reverse of a manual progression (4 -> 3 next to 3 -> 4)',
   $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (4,3,'progression',true)$q$);
-SELECT pg_temp.expect_fail('DQ36 the same edge twice',
+SELECT pg_temp.expect_fail('DQ36 the same variation twice',
   $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (2,3,'variation',false)$q$);
 SELECT pg_temp.expect_fail('warning <=> no candidate',
   $q$INSERT INTO recommendation (session_id, plan_item_id, rule_id, form, is_warning, candidate_exercise_id, affected_count, explanation, explanation_source) VALUES (1,2,9,'alternative',true,3,1,'x','template')$q$);

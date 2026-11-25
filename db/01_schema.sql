@@ -381,11 +381,12 @@ CREATE TABLE recommendation_decision (
 -- The indexes below support the main queries and FK checks.
 -- ---------------------------------------------------------------------
 
--- DQ36: one edge per pair of exercises, whatever the type and direction:
--- a pair is never both a variation and a progression, and A -> B and
--- B -> A cannot both exist (no two-exercise progression cycle)
-CREATE UNIQUE INDEX uq_exercise_relation_pair
-    ON exercise_relation (LEAST(from_exercise_id, to_exercise_id), GREATEST(from_exercise_id, to_exercise_id));
+-- DQ36: at most one edge of each type per pair of exercises. A pair may be
+-- in both graphs (a variation AND a progression), but never has two
+-- variations or progressions in both directions (A -> B and B -> A would
+-- be a two-exercise progression cycle).
+CREATE UNIQUE INDEX uq_exercise_relation_pair_type
+    ON exercise_relation (LEAST(from_exercise_id, to_exercise_id), GREATEST(from_exercise_id, to_exercise_id), type);
 -- recursive candidate search (WITH RECURSIVE over the exercise graph)
 CREATE INDEX ix_exercise_relation_from_type ON exercise_relation (from_exercise_id, type);
 -- undirected edges are also followed backwards
@@ -431,7 +432,7 @@ COMMENT ON TABLE exercise_joint          IS 'Joints involved in an exercise (M:N
 COMMENT ON TABLE exercise_family         IS 'Movement family: exercises that can stand in for each other';
 COMMENT ON TABLE exercise_family_member  IS 'Families of an exercise (M:N; up to three in the library sheet)';
 COMMENT ON TABLE exercise_compensation   IS 'Acceptable compensating exercises of an exercise (BR6; any one satisfies the rule)';
-COMMENT ON TABLE exercise_relation       IS 'Exercise graph edges: variation / progression';
+COMMENT ON TABLE exercise_relation       IS 'Edges of two graphs over the same exercises: variation (same movement) and progression (harder version); a pair may have both';
 COMMENT ON TABLE plan                    IS 'Plan blueprint built by the coach; checked by BR1–BR8 and reviewed before use';
 COMMENT ON TABLE plan_item               IS 'Exercise at a position within a phase of a plan';
 COMMENT ON TABLE session                 IS 'One class: a reviewed plan + decisions on recommendations + time, group, check-ins, attendance';

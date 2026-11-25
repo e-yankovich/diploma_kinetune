@@ -37,7 +37,7 @@ Declared in `db/01_schema.sql` (migration 0001) plus the password-hash check (`0
 |---|---|---|
 | PRIMARY KEY | 24 | One per table |
 | FOREIGN KEY | 31 | Every FK has `ON DELETE` set explicitly (dictionary §5). No FK is left with the implicit default. |
-| UNIQUE | 10 + 1 unique index | Names, codes, e-mail, family name, check-in token, plan item position; unique index `uq_exercise_relation_pair`: one edge per pair of exercises (DQ36) |
+| UNIQUE | 10 + 1 unique index | Names, codes, e-mail, family name, check-in token, plan item position; unique index `uq_exercise_relation_pair_type`: at most one edge of each type per pair, so no progressions in both directions (DQ36) |
 | CHECK | 31 | Ranges (1–5, 1–3, `> 0`), formats (regex on codes, argon2id hash), cross-column rules |
 | NOT NULL | most columns | NULL is allowed only where "unknown / not applicable" is a real state (e.g. `participants_present` while the check-in is open, `target_duration_min` of a draft plan) |
 
