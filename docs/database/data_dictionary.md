@@ -33,7 +33,7 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 |---|---|---|---|
 | Reference | `body_area`, `muscle`, `joint`, `rule` | Migration 0002 (`03_reference_data.sql`) | None |
 | Exercise library | `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_family`, `exercise_family_member`, `exercise_compensation`, `exercise_relation` | Library import (author's spreadsheet) | None |
-| Access control | `app_user`, `role`, `permission`, `role_permission`, `user_role` | Seed files; admin UI | `app_user`: **personal data** (e-mail, password hash) |
+| Access control | `app_user`, `role`, `permission`, `role_permission`, `user_role` | Seed files and maintenance (MVP); admin UI later | `app_user`: **personal data** (e-mail, password hash) |
 | Planning | `plan`, `plan_item`; views `v_plan_item`, `v_session_plan` (§7) | Coach UI | None |
 | Sessions and participant input | `session`, `checkin`, `checkin_discomfort`, `feedback` | Coach UI; participant forms (anonymous) | Check-ins: **anonymous health-related answers** (no identifiers stored) |
 | Recommendations | `recommendation`, `recommendation_decision` | Recommendation engine; coach UI | Derived from aggregated check-ins |
@@ -338,6 +338,7 @@ Index: (`role_id`), for "who holds role X" (last-admin and coach-role checks).
 
 Notes:
 - "Own" (plans, sessions) is checked by the API by comparing `coach_id` with the logged-in user.
+- **The admin role is part of the data model but not of the MVP.** The MVP has no admin screens or admin API; the bootstrap admin and the coach accounts are created by seed or maintenance scripts. The model (roles, permissions, DQ22, DQ23) is ready for the admin features after the MVP.
 - The admin does not see check-ins, feedback or recommendations. These are the coach's working data, so they are not needed for administration (data minimisation).
 - **Adding the `client` role later** needs only new rows in `role`, `permission` and `role_permission`, plus new tables for whatever clients own (e.g. a link between a client account and their check-ins). Today check-ins are anonymous, so a client account would also need a new consent and legal basis (thesis 2.8).
 

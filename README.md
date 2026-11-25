@@ -5,32 +5,36 @@ This repository currently contains the **database layer**; the backend (FastAPI)
 
 ## Quick start
 
-Requirements: Docker with Docker Compose v2.
+Requirements: Docker with Docker Compose v2. All commands run from the repository root
+(`docker-compose.yml` and `.env` live there).
+
+**Run order:** database + migrations → library import → (optional) test data → checks.
 
 ```bash
-# run from the repository root (docker-compose.yml and .env live there)
+# 1. secrets
 cp .env.example .env          # then set real passwords (see "Secrets" below)
-docker compose up -d          # 1) starts PostgreSQL 18  2) applies migrations
+
+# 2. database and migrations 0001–0004
+docker compose up -d          # starts PostgreSQL 18, then the one-shot "migrate" service
 docker compose logs migrate   # "Running upgrade ... -> 0004, Password policy ..."
-```
 
-Load the exercise library from the author's spreadsheet (`db/library/kinetune_library.xlsx`;
-one transaction, all problems reported together, see
-[`docs/database/library_import.md`](docs/database/library_import.md)):
-
-```bash
+# 3. exercise library from the author's spreadsheet (db/library/kinetune_library.xlsx)
 docker compose --profile import run --rm import-library /data/kinetune_library.xlsx --dry-run
 docker compose --profile import run --rm import-library
-```
 
-Optionally load the test/demo dataset on top of the imported library (accounts, plans and
-sessions in every status, check-ins, recommendations and decisions; see
-[`docs/database/test_data.md`](docs/database/test_data.md) §2). It refuses to run if the
-database already has users or if the library is empty:
-
-```bash
+# 4. optional: test/demo data on top of the imported library
 docker compose --profile test run --rm seed-test
 ```
+
+- The **library import** runs in one transaction and reports all problems together with
+  sheet, row, column and value; it connects as `kinetune_admin`. A changed sheet is applied
+  to an existing library with `--update`. Details:
+  [`docs/database/library_import.md`](docs/database/library_import.md).
+- The **test data** (accounts, plans and sessions in every status, check-ins,
+  recommendations and decisions, the rule edge cases) references the imported exercises by
+  name. It refuses to run if the database already has users or if the library is empty.
+  Contents: [`docs/database/test_data.md`](docs/database/test_data.md) §2.
+- Then run the checks and tests ("Running the tests" below).
 
 Connect with any client on `localhost:${DB_PORT}` (default 5432; reachable only from
 this machine), database `kinetune`, schema `kinetune`. The superuser is for
@@ -64,10 +68,10 @@ Migrations applied:
 
 | Rev | Contents                                                                                                                                                                                           |
 |---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0001 | schema: types, tables, constraints, indexes (`01`); triggers, plan lock, `duplicate_plan()`, views `v_plan_item` / `v_session_plan` (`02`)                                                          |
+| 0001 | schema: types, tables, constraints, indexes (`01`); triggers, plan lock, `duplicate_plan()`, views `v_plan_item` / `v_session_plan` / `v_exercise_variation` (`02`)                                 |
 | 0002 | reference data: roles, permissions, body areas, muscles, joints, rules BR1–BR11 (`03`)                                                                                                             |
 | 0003 | group roles `app_read`/`app_write`/`app_admin`, privileges, SECURITY DEFINER triggers (`04`)                                                                                                       |
-| 0004 | password policy: `app_user.password_hash` mnust be an argon2id PHC string (`05`)                                                                                                                   |
+| 0004 | password policy: `app_user.password_hash` must be an argon2id PHC string (`05`)                                                                                                                   |
 
 Useful commands (run from the repository root):
 
@@ -102,7 +106,7 @@ The full privilege matrix and the checklist for new objects are in
 ## Repository layout
 
 ```text
-docker-compose.yml           db + migrate + seed-test (profile "test")
+docker-compose.yml           db + migrate; import-library (profile "import"); seed-test (profile "test")
 .env.example                 template for secrets (.env is git-ignored)
 db/
   01_schema.sql              DDL: types, tables, constraints, indexes, comments
@@ -118,7 +122,7 @@ db/
     10_login_roles.sh        creates login roles with passwords from .env
     login_roles.psql         the role DDL it executes (passwords, never in Git)
   seed/
-    test_data.sql            demo/test dataset (loaded via the seed-test service)
+    test_data.sql            test/demo dataset on top of the imported library (seed-test service)
   library/
     import_library.py        library import: validates the sheet, derives the graphs
     kinetune_library.xlsx    the author's library workbook (input of the import)
@@ -132,8 +136,12 @@ db/
 docs/
   database/
     kinetune_schema.dbml     logical schema (render at dbdiagram.io)
+    kinetune-er-diagram.png  ER diagram rendered from the DBML
     data_dictionary.md       tables, columns, types, keys, data quality rules
     data_integrity_and_transactions.md  how integrity and transactions are handled
+    security_and_access.md   database roles, privilege matrix, checklist for new objects
+    library_import.md        library sheet format, validation, graph derivation
+    test_data.md             reference data and the test dataset (edge cases, expected warnings)
   requirements/              thesis and course requirements (local only, git-ignored)
   business-rules.md          training rules notes (local only, git-ignored)
 ```
@@ -144,14 +152,15 @@ With the stack running, from the repository root (the smoke test creates and dro
 scratch database, so it connects as the **superuser**):
 
 ```bash
-# DDL: constraints and triggers  (expected: 86 lines PASS, no FAIL)
+# DDL: constraints and triggers  (expected: 88 lines PASS, no FAIL)
 PGHOST=localhost PGPORT=${DB_PORT} PGUSER=postgres PGPASSWORD=... db/tests/run_ddl_test.sh
 
-# Roles and privileges  (run after the migrations; own fixture rows; expected: 79 PASS, no FAIL)
+# Roles and privileges  (run after the migrations; own fixture rows; expected: 81 PASS, no FAIL)
 psql "host=localhost port=${DB_PORT} user=postgres dbname=kinetune" \
      -v ON_ERROR_STOP=1 -f db/tests/privileges_test.sql
 
 # Data quality: each row is a rule violation; no 'error' rows = data is valid
+# (after import + test data: 0 errors, 7 intended warnings)
 psql "host=localhost port=${DB_PORT} user=kinetune_reader dbname=kinetune" \
      -f db/checks/data_quality_checks.sql
 ```
@@ -175,7 +184,14 @@ role: an empty result means every rule holds; `warning` rows are reported but ac
 5. Update `docs/database/` (DBML, data dictionary) in the same commit.
 6. `docker compose up migrate` applies it.
 
-Existing migrations are never edited after they have been applied anywhere.
+### Versioning
+
+Every schema change is a migration in Git; the database records its version in
+`public.alembic_version`. **Existing migrations are never edited after they have been
+applied anywhere.** Before the first deployment, the structure was consolidated into the
+baseline migrations 0001–0004 (November 2026; no database had been deployed from the
+earlier migrations); from the first real deployment on, every change is a new migration,
+starting with 0005.
 
 ## Secrets
 
