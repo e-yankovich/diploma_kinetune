@@ -3,6 +3,18 @@
 Hybrid recommendation system for adapting group training plans (diploma project).
 This repository contains the database layer and a prototype slice of the application: a FastAPI backend and a React frontend for the exercise library, all in one Docker Compose stack ([containers](docs/containers/README.md)).
 
+## Diploma criteria: where they are implemented
+
+The prototype slice covers one feature end to end — the **exercise library** (US1.2): list with filters and sorting, exercise card with joints, muscles, compensations and the two exercise graphs, families. The database is described in the sections below and in [`docs/database/`](docs/database/).
+
+| Criterion | Where | What is done |
+|---|---|---|
+| **Backend** | `backend/` | FastAPI with layered architecture (routers → services → repositories behind a protocol), async SQLAlchemy 2.x ORM over the existing schema, Pydantic validation, settings only from environment variables, global error handling (one JSON error body, correct status codes 404/405/422/500/503), structured JSON logs without client IP addresses, `/health`. Endpoints: `GET /api/v1/exercises`, `GET /api/v1/exercises/{id}`, `GET /api/v1/families`. Unit, API and repository tests: 41 tests, 98 % coverage ([`docs/testing.md`](docs/testing.md)). |
+| **API documentation** | [`docs/api/`](docs/api/README.md) | OpenAPI 3.1 generated from the code ([`schemas/openapi.json`](docs/api/schemas/openapi.json)), linted with Redocly CLI; Swagger UI at `/docs`. Getting started guide, step-by-step tutorial, reference with real request/response examples and status codes, data models, error taxonomy, architecture diagrams, documentation strategy, versioning, changelog, runnable examples. |
+| **Frontend** | `frontend/`, [`docs/frontend/architecture.md`](docs/frontend/architecture.md) | React 18 + TypeScript SPA built with Vite; 5 routes (`/exercises`, `/exercises/:id`, `/families`, `/about`, 404); pages / reusable components / hooks / centralised API client; global state (filters, notifications) with Context + useReducer; controlled filter form with validation, sortable table; error boundary, toasts, 401/403/404/500 handling, skeleton loading; responsive layout (phone/tablet/desktop, 44 px touch targets, WCAG AA contrast); ESLint + Prettier; Vitest + Testing Library tests: 33 tests, 97 % coverage. Docs: architecture and user-flow diagrams, approach, stack justification. |
+| **Containerization** | `backend/Dockerfile`, `frontend/Dockerfile`, `db/Dockerfile`, `docker-compose.yml`, [`docs/containers/`](docs/containers/README.md) | One Dockerfile per service, multi-stage builds, non-root users, `.dockerignore`, versioned image tags, healthchecks; Compose with start order db → migrate → backend → frontend, isolated networks, volume for the database, settings from `.env` (`.env.example`). Docs: images, variables, container diagram, resource requirements. |
+| **CI/CD** | — | Not implemented yet (planned: lint/format → build → tests → images → deploy). |
+
 ## Quick start
 
 Requirements: Docker with Docker Compose v2. All commands run from the repository root
