@@ -24,6 +24,8 @@ TRIGGER_FUNCTIONS = [
     "fn_session_owner", "fn_plan_owner", "fn_plan_set_updated_at",
     "fn_plan_touch_from_item", "fn_plan_item_side", "fn_recommendation_consistency",
     "fn_decision_time", "fn_last_admin", "fn_granted_by_admin",
+    "fn_session_plan_reviewed", "fn_plan_status", "fn_plan_item_guard",
+    "fn_decision_single_replacement",
 ]
 
 
@@ -47,6 +49,8 @@ def downgrade() -> None:
     op.execute(f"""
         {functions}
         ALTER FUNCTION kinetune.has_role(integer, text) RESET search_path;
+        ALTER FUNCTION kinetune.plan_is_locked(integer) RESET search_path;
+        ALTER FUNCTION kinetune.duplicate_plan(integer, text) RESET search_path;
 
         ALTER DEFAULT PRIVILEGES IN SCHEMA kinetune REVOKE SELECT ON TABLES    FROM app_read;
         ALTER DEFAULT PRIVILEGES IN SCHEMA kinetune REVOKE USAGE  ON SEQUENCES FROM app_write;

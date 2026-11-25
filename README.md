@@ -84,6 +84,8 @@ carry no privileges directly; they inherit from NOLOGIN **group roles**:
 the exercise library (no DDL). New tables are readable by `app_read` automatically via
 default privileges; **write access is never automatic** and must be granted explicitly in
 the migration that creates the table (`db/tests/privileges_test.sql` enforces this).
+The full privilege matrix and the checklist for new objects are in
+[`docs/database/security_and_access.md`](docs/database/security_and_access.md).
 
 ## Repository layout
 
@@ -128,10 +130,10 @@ With the stack running, from the repository root (the smoke test creates and dro
 scratch database, so it connects as the **superuser**):
 
 ```bash
-# DDL: constraints and triggers  (expected: 64 lines PASS, no FAIL)
+# DDL: constraints and triggers  (expected: 86 lines PASS, no FAIL)
 PGHOST=localhost PGPORT=${DB_PORT} PGUSER=postgres PGPASSWORD=... db/tests/run_ddl_test.sh
 
-# Roles and privileges  (run after migrations + test data; expected: no FAIL)
+# Roles and privileges  (run after the migrations; own fixture rows; expected: 72 PASS, no FAIL)
 psql "host=localhost port=${DB_PORT} user=postgres dbname=kinetune" \
      -v ON_ERROR_STOP=1 -f db/tests/privileges_test.sql
 

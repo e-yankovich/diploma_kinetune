@@ -261,7 +261,7 @@ Data quality:
 
 Role-based access control (RBAC): a user has one or more roles, a role has a set of permissions, and the API checks the permission behind each endpoint (**A**). The database stores the model and its integrity rules; it does not decide access per request.
 
-These are **application roles** (who may do what in the platform). They are separate from **PostgreSQL roles** (`app_read`, `app_write`, `migrator`, …), which control what the backend's database connections may do and are described in the security documentation.
+These are **application roles** (who may do what in the platform). They are separate from **PostgreSQL roles** (`app_read`, `app_write`, `migrator`, …), which control what the backend's database connections may do and are described in `security_and_access.md`.
 
 #### `app_user`
 Every account that logs in: coaches and admins now, clients later. **Personal data.**

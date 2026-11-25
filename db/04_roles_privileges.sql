@@ -15,25 +15,43 @@
 --
 -- Login roles and their passwords are created outside Git by
 -- db/init/10_login_roles.sh (first start of the database container).
--- The full access matrix is in the project README ("Roles and access").
+-- The full access matrix and the checklist for new objects are in
+-- docs/database/security_and_access.md.
 -- =====================================================================
 
 SET search_path TO kinetune;
 
 -- ---------------------------------------------------------------------
 -- 1. Group roles (cluster-wide objects; created only if missing)
+--    PostgreSQL 16+: a CREATEROLE role (kinetune_migrator) can manage only
+--    roles it holds with ADMIN OPTION; it gets that automatically for the
+--    roles it creates. If the roles were created earlier by a superuser
+--    (e.g. tests/run_ddl_test.sh ran before the migrations), the superuser
+--    run hands ADMIN OPTION to kinetune_migrator below, without membership
+--    (INHERIT FALSE, SET FALSE: the migrator does not get the group's
+--    privileges). If the migrator still cannot manage a role, the migration
+--    stops with a message that says how to fix it.
 -- ---------------------------------------------------------------------
 DO $$
+DECLARE
+    r text;
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_read') THEN
-        CREATE ROLE app_read NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_write') THEN
-        CREATE ROLE app_write NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_admin') THEN
-        CREATE ROLE app_admin NOLOGIN;
-    END IF;
+    FOREACH r IN ARRAY ARRAY['app_read', 'app_write', 'app_admin'] LOOP
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN
+            EXECUTE format('CREATE ROLE %I NOLOGIN', r);
+        END IF;
+
+        IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
+           AND EXISTS (SELECT FROM pg_roles WHERE rolname = 'kinetune_migrator') THEN
+            EXECUTE format('GRANT %I TO kinetune_migrator WITH ADMIN TRUE, INHERIT FALSE, SET FALSE', r);
+        END IF;
+
+        IF NOT pg_has_role(current_user, r, 'MEMBER WITH ADMIN OPTION') THEN
+            RAISE EXCEPTION 'Role % exists, but % cannot manage it (no ADMIN OPTION)', r, current_user
+                USING HINT = format('As a superuser run: GRANT %I TO %I WITH ADMIN TRUE, INHERIT FALSE, SET FALSE; '
+                                    'then run the migration again', r, current_user);
+        END IF;
+    END LOOP;
 END
 $$;
 
@@ -53,6 +71,11 @@ REVOKE CREATE ON SCHEMA public   FROM PUBLIC;     -- default since PG 15; stated
 
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA kinetune FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION has_role(integer, text) TO app_read;
+-- calculated data (02_triggers.sql): the views call item_duration_sec(),
+-- and a view's functions are checked against the user who reads the view
+GRANT  EXECUTE ON FUNCTION item_duration_sec(integer, integer, boolean, side) TO app_read;
+GRANT  EXECUTE ON FUNCTION plan_is_locked(integer)                             TO app_read;
+GRANT  EXECUTE ON FUNCTION duplicate_plan(integer, text)                       TO app_write;
 
 -- ---------------------------------------------------------------------
 -- 3. app_read: SELECT on everything, except personal data of accounts
@@ -61,6 +84,8 @@ GRANT  SELECT ON ALL TABLES IN SCHEMA kinetune TO app_read;
 REVOKE SELECT ON app_user FROM app_read;
 GRANT  SELECT (id, display_name, is_active, created_at, last_login_at) ON app_user TO app_read;
 -- not granted: app_user.email, app_user.password_hash
+-- views of calculated data (also covered by ALL TABLES; stated explicitly)
+GRANT  SELECT ON v_plan_item, v_session_plan TO app_read;
 
 -- ---------------------------------------------------------------------
 -- 4. app_write: what the backend needs, nothing more
@@ -75,7 +100,7 @@ GRANT UPDATE (email, password_hash, display_name, is_active, last_login_at) ON a
 GRANT INSERT, DELETE ON user_role TO app_write;   -- roles are granted / revoked, never edited
 
 GRANT INSERT, DELETE ON plan TO app_write;
-GRANT UPDATE (title, notes) ON plan TO app_write;
+GRANT UPDATE (title, notes, target_duration_min, status) ON plan TO app_write;
 
 GRANT INSERT, DELETE ON plan_item TO app_write;
 GRANT UPDATE (exercise_id, phase, position, side, reps_count) ON plan_item TO app_write;
@@ -99,6 +124,7 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA kinetune TO app_write;
 GRANT INSERT, UPDATE, DELETE ON
       body_area, muscle, joint, rule,
       exercise, exercise_muscle, exercise_joint, exercise_relation,
+      exercise_family, exercise_family_member, exercise_compensation,
       role, permission, role_permission
    TO app_admin;
 GRANT UPDATE ON user_role TO app_admin;
@@ -115,7 +141,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA kinetune REVOKE EXECUTE ON FUNCTIONS FROM PUB
 
 -- ---------------------------------------------------------------------
 -- 7. Trigger functions run with the owner's rights (SECURITY DEFINER)
---    The business rules (DQ01–DQ25) must hold whoever writes the data, and
+--    The business rules (DQ01–DQ33) must hold whoever writes the data, and
 --    the rule checks read tables the caller may not see (e.g. the
 --    last-admin check locks all admin rows). A fixed search_path prevents
 --    a caller from substituting objects with the same names.
@@ -133,6 +159,14 @@ ALTER FUNCTION fn_recommendation_consistency()    SECURITY DEFINER SET search_pa
 ALTER FUNCTION fn_decision_time()                 SECURITY DEFINER SET search_path = kinetune, pg_temp;
 ALTER FUNCTION fn_last_admin()                    SECURITY DEFINER SET search_path = kinetune, pg_temp;
 ALTER FUNCTION fn_granted_by_admin()              SECURITY DEFINER SET search_path = kinetune, pg_temp;
+ALTER FUNCTION fn_session_plan_reviewed()         SECURITY DEFINER SET search_path = kinetune, pg_temp;
+ALTER FUNCTION fn_plan_status()                   SECURITY DEFINER SET search_path = kinetune, pg_temp;
+ALTER FUNCTION fn_plan_item_guard()               SECURITY DEFINER SET search_path = kinetune, pg_temp;
+ALTER FUNCTION fn_decision_single_replacement()   SECURITY DEFINER SET search_path = kinetune, pg_temp;
+-- helpers: fixed search_path, caller's rights (duplicate_plan inserts as
+-- the caller, so the API's own grants apply)
+ALTER FUNCTION plan_is_locked(integer)            SET search_path = kinetune, pg_temp;
+ALTER FUNCTION duplicate_plan(integer, text)      SET search_path = kinetune, pg_temp;
 
 -- ---------------------------------------------------------------------
 -- 8. Give the login roles their group (if the bootstrap created them)
