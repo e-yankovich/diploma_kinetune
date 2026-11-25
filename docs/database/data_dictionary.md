@@ -51,7 +51,7 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 | `exercise_family` | ~20 |
 | `exercise_family_member` | ~150 |
 | `exercise_compensation` | ~70 |
-| `exercise_relation` | ~850 (about 600 variations, 250 progressions) |
+| `exercise_relation` | ~250 (progressions only; ~600 variation pairs are derived from families, not stored) |
 | `app_user` | 1–2 (the author can hold both roles in one account) |
 | `role` | 2 (3 when `client` is added) |
 | `permission` | 10–15 |
@@ -75,7 +75,7 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 | `exercise_mode` | `dynamic`, `static`, `stato_dynamic` | How the exercise is performed. `dynamic`: continuous movement (BR2: only these in the warm-up; BR4: only these count as the dynamic exercise that must precede a static one). `static`: holding a position (BR4; BR5: static ≤ 40 % of the main part). `stato_dynamic`: a hold combined with small movements; not allowed in the warm-up (BR2), does not count as dynamic in BR4 and is not counted as static in BR5. Order used by the graph derivation: dynamic < static < stato_dynamic (§4.2). |
 | `starting_pose` | `seated`, `standing`, `balance`, `quadruped`, `downward_dog`, `supine`, `prone`, `kneeling`, `front_split` | Starting position, as used in the library. Only `balance` has a meaning in the rules: BR9/BR10 (balance exercises are affected by low energy or poor sleep), BR11 (the cascade looks for a candidate without balance) and the graph derivation (balance makes an exercise harder). The other values are for display and filtering. |
 | `side` | `left`, `right`, `both` | Which side a plan item is performed on. `both`: both sides within one item. An asymmetric exercise can also be planned as two items, `left` and `right` (BR7). |
-| `relation_type` | `variation`, `progression` | `variation`: the same movement, another execution, at any level (undirected). `progression`: a harder version (the target is harder by at least one attribute and easier by none, or a manual progression); the reverse direction is a regression. One pair may have both. Criteria in §4.2 (`exercise_relation`). |
+| `relation_type` | `progression` | Type of a stored graph edge. Only `progression` exists: a harder version (the target is harder by at least one attribute and easier by none, or a manual progression); the reverse direction is a regression. Variations are **not** stored as edges: two exercises are variations iff they share a family (`v_exercise_variation`, §7). One pair can be both (shared family + progression). Criteria in §4.2. |
 | `load_level` | `low`, `medium`, `high` | How much an exercise loads a joint (`exercise_joint.load_level`). BR9/BR10 react to `high`; the BR11 cascade looks for no load, then a lower load; the graph derivation compares loads (§4.2). |
 | `energy_level` | `low`, `normal`, `high` | Self-rated energy in the check-in. `low` is the low-energy factor of BR9/BR10. |
 | `plan_status` | `draft`, `completed`, `reviewed` | `draft`: the coach is building the plan. `completed`: the coach finished building it (a target duration is required). `reviewed`: the BR1–BR8 check was run on the plan and the coach reviewed the result. Allowed transitions: draft → completed → reviewed, and back to `draft` from any status. Any change to the plan or its items moves it back to `draft` (**T**). Details in §4.4. |
@@ -196,12 +196,14 @@ Both values are assigned by the coach when compiling the library. They are exper
 #### `exercise_family`
 A movement family: exercises that can stand in for each other, e.g. "ankle mobility" = ankle circles and ankle flexion/extension, seated and standing. Entered by the coach in the library sheet (columns "Family 1–3"); created by the library import.
 
+**The variation graph is stored here, as a star around each family** (a bipartite graph exercise — family): `exercise_family` is the hub, `exercise_family_member` the spokes. Two exercises are variations **iff they share a family**. Pairwise variation edges are not stored: they would be fully derivable from the membership (redundant data, update anomalies). The view `v_exercise_variation` (§7) lists the pairs when they are needed (explanations, debugging).
+
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | smallint | no | PK | identity | |
 | `name` | varchar(64) | no | UQ | | CHECK `btrim(name) <> ''`. A reference table, so a typo cannot create a second family. |
 
-Data quality: a family has at least 2 exercises (**Q**, DQ35, warning). Members should share at least one main muscle (BR11).
+Data quality: a family should have at least 2 exercises (**Q**, DQ35, warning). A family with one exercise is allowed in the MVP: its member has no variations through it. Members should share at least one main muscle (BR11).
 
 #### `exercise_family_member`
 Which families an exercise belongs to (M:N). An exercise may belong to up to three families (a limit of the sheet, not of the database).
@@ -225,37 +227,41 @@ Index: (`compensation_exercise_id`), for "which exercises does X compensate" and
 Data quality: no two-exercise loop, i.e. A compensated by B and B compensated by A (**Q**, DQ26); a compensating exercise is active (**Q**, DQ27). In the sheet: columns "Compensation exercise 1–4" (exercise names); the import writes one row per filled cell.
 
 #### `exercise_relation`
-Edges of the two exercise graphs, used to find substitute candidates (`WITH RECURSIVE`, depth ≤ 2). The two graphs describe two **independent** relations over the same exercises, so **one pair of exercises can be in both graphs at once**:
-- **Variation graph** (undirected, similarity): "another execution of the same movement". It says nothing about difficulty.
-- **Progression graph** (directed, difficulty): "B is a harder version of A". Followed backwards it gives regressions; steps along it are levels.
+The **progression graph**: directed edges easier → harder, used to find regressions (`WITH RECURSIVE`, depth ≤ 2). It is one of the two exercise graphs of the thesis; they describe two **independent** relations over the same exercises and are stored in two different structures:
+- **Variation graph** (similarity, undirected): "another execution of the same movement", at any level. Stored as a star around each family (`exercise_family` + `exercise_family_member`), not in this table.
+- **Progression graph** (difficulty, directed): "B is a harder version of A". Stored here. Followed backwards it gives regressions; steps along it are levels.
 
-Example: Ankle Circles Seated and Ankle Circles Standing are variations of each other **and** Standing is a progression of Seated (balance on one leg). Ankle Circles Standing and Ankle Flexion and Extension Standing are only variations. The search combines the graphs: "same level" = a variation with no progression in either direction; "a gentler version of the same stretch" = a variation that is also a regression; "an easier exercise from another family" = a manual regression only. A candidate is **never a progression of the original** (harder), even if it is also a variation. Both graphs are one edge table with a type and a direction.
+**One pair can be in both graphs** (a shared family and a progression edge). Example: Ankle Circles Seated and Ankle Circles Standing are variations (same family) **and** Standing is a progression of Seated (balance on one leg). Ankle Circles Standing and Ankle Flexion and Extension Standing are only variations. The search combines the graphs: "same level" = a variation with no progression in either direction; "a gentler version of the same stretch" = a variation that is also a regression; "an easier exercise from another family" = a manual regression only.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | integer | no | PK | identity | |
-| `from_exercise_id` | integer | no | FK → `exercise` | | Source exercise |
-| `to_exercise_id` | integer | no | FK → `exercise` | | Target exercise. CHECK `from_exercise_id <> to_exercise_id` (no self-loops). |
-| `type` | relation_type | no | | | Variation or progression |
-| `is_directed` | boolean | no | | `true` | `true`: the edge is followed only from → to. `false`: it is followed both ways. Undirected edges are stored once: CHECK `is_directed OR from_exercise_id < to_exercise_id`. |
-| `is_manual` | boolean | no | | `false` | `false` = derived by the library import from families and attributes; `true` = a manual progression from the sheet "Progressions (manual)". Needed for the "no bridges" rule of BR11. |
+| `from_exercise_id` | integer | no | FK → `exercise` | | The easier exercise |
+| `to_exercise_id` | integer | no | FK → `exercise` | | The harder exercise. CHECK `from_exercise_id <> to_exercise_id` (no self-loops). |
+| `type` | relation_type | no | | `progression` | Always `progression` (the only value) |
+| `is_manual` | boolean | no | | `false` | `false` = derived by the library import from attributes; `true` = a manual progression from the sheet "Progressions (manual)". Needed for the "no bridges" rule of BR11. |
 
-**How the edges are derived** (business rules v2, "Exercise graphs"). Exercise B is **harder than A by an attribute** if: B's `difficulty` is higher; or B's `mode` is later in the order dynamic < static < stato_dynamic; or B's `starting_pose` is `balance` and A's is not; or B has a higher `load_level` on some joint than A (a joint A does not involve counts as no load). For every pair (A, B) that shares at least one family:
-- **always** a **variation** A — B (`is_directed = false`, stored once with the smaller id first, `is_manual = false`);
-- **in addition**, if B is harder than A by at least one attribute and easier by none → a **progression** A → B (`is_directed = true`, `is_manual = false`);
+Every edge is directed.
+
+**How the graphs are derived** (business rules v2, "Exercise graphs"; details in `library_import.md`). Exercise B is **harder than A by an attribute** if: B's `difficulty` is higher; or B's `mode` is later in the order dynamic < static < stato_dynamic; or B's `starting_pose` is `balance` and A's is not; or B has a higher `load_level` on some joint than A (a joint A does not involve counts as no load). For every pair (A, B) that shares at least one family:
+- the pair is a **variation**, implicitly through the family (nothing is stored per pair);
+- **in addition**, if B is harder than A by at least one attribute and easier by none → a stored **progression** A → B (`is_manual = false`);
 - harder by one attribute and easier by another → variation only (the levels cannot be compared).
 
-"Harder" is a strict comparison, so derived progressions never form a cycle. **Manual progressions** (`is_manual = true`) cover what the attributes cannot detect (expert judgement, links between families). A manual progression adds a progression edge; if the two exercises share a family, their variation edge stays. If the attributes say the opposite direction, the manual edge replaces the derived progression (expert judgement wins), so a pair never has progressions in both directions (DQ36).
+"Harder" is a strict comparison, so derived progressions never form a cycle. **Manual progressions** (`is_manual = true`) cover what the attributes cannot detect (expert judgement, links between families). If the two exercises share a family, they stay variations as well. If the attributes say the opposite direction, the manual edge replaces the derived progression (expert judgement wins), so a pair never has progressions in both directions (DQ36).
 
-**No bridges.** A candidate must share at least one family with the original exercise, or be linked to it by manual progressions (directly or through a chain of them). An exercise in two families therefore never connects two families that the coach did not link.
+**Candidate search** (BR11; implemented by the backend):
+- **variations** = members of the original's families: one hop through the family, no recursion;
+- **regressions** = progressions followed backwards, up to 2 steps, with a cycle guard;
+- a candidate is **never a progression of the original** (a harder version), even if it is also a variation;
+- **no bridges**: a candidate shares a family with the original or is linked to it by manual progressions. With the star storage this holds by construction for variations (one step through the hub, never two); the recursion is needed only for chains of progressions.
 
-Keys and indexes: unique index `uq_exercise_relation_pair_type` on (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`, `type`): at most one edge of each type per pair, whatever the direction (DQ36). A pair may have one variation and one progression. Index (`from_exercise_id`, `type`) for the forward search; index (`to_exercise_id`) for the backward search over undirected edges.
+Keys and indexes: unique index `uq_exercise_relation_pair_type` on (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`, `type`): at most one progression per pair, whatever the direction (DQ36); it includes UNIQUE (`from_exercise_id`, `to_exercise_id`, `type`). Index (`to_exercise_id`) for the backward search (regressions); index (`from_exercise_id`, `type`) for the forward direction (future "harder alternatives").
 
 Data quality:
 - Progression edges form no cycle: an exercise cannot be harder than itself through a chain (**Q**, DQ12).
 - For a progression edge, the target's difficulty is greater than or equal to the source's (**Q**, DQ17).
-- A pair of exercises has at most one edge of each type: no duplicate variation, and no progressions in both directions (A → B together with B → A) (**C**, unique index, DQ36). A variation and a progression for the same pair are allowed.
-- A variation is expected to be undirected; a directed variation is reported for review (**Q**, warning only).
+- No duplicate progression and no progressions in both directions (A → B together with B → A) (**C**, unique index, DQ36).
 
 ### 4.3 Access control
 
@@ -521,7 +527,7 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ08 | Consistency | A session's coach is the owner of its plan | T | error |
 | DQ09 | Completeness | Every active exercise has at least one main joint or main muscle | Q | error (library import fails) |
 | DQ10 | Completeness | Every body area has at least one muscle or joint | Q | error (seed fails) |
-| DQ11 | Completeness | Every active exercise used in plans has at least one relation edge, so a substitute can be searched for | Q | warning |
+| DQ11 | Completeness | Every active exercise used in plans has at least one variation (a family with another member) or one regression, so a substitute can be searched for | Q | warning |
 | DQ12 | Validity | Progression edges contain no cycles | Q | error |
 | DQ13 | Consistency | Plan item positions in a phase are continuous 1..n | A + Q | warning |
 | DQ14 | Completeness | `rule` holds exactly BR1–BR11 | Q | error |
@@ -545,8 +551,8 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ32 | Completeness | A session becomes `reviewed` only when every recommendation has a decision | T | error |
 | DQ33 | Consistency | At most one accepted replacement per plan item and session | T | error |
 | DQ34 | Completeness | Every body area shown in the check-in (`is_in_checkin`) has at least one joint | Q | error (seed fails) |
-| DQ35 | Completeness | Every exercise family has at least 2 exercises | Q | warning |
-| DQ36 | Consistency | A pair of exercises has at most one edge of each type: no pair with progressions in both directions, no duplicate variation (a variation plus a progression is allowed) | C (unique index) | error |
+| DQ35 | Completeness | Every exercise family has at least 2 exercises (a family with one exercise is allowed in the MVP; reported only) | Q | warning |
+| DQ36 | Consistency | At most one progression per pair of exercises: no duplicate edge, no progressions in both directions | C (unique index) | error |
 
 Check queries (Q) are kept in Git next to the migrations and run (a) in the automated tests, (b) after every library import, and (c) before the pilot.
 
@@ -560,6 +566,7 @@ Derived values are calculated when they are read, not stored (3NF). Each formula
 |---|---|---|---|
 | `item_duration_sec(reps_count, rep_duration_sec, is_symmetric, side)` | function, IMMUTABLE | Item duration in seconds: `reps_count × rep_duration_sec`, × 2 if `is_symmetric = false` and `side = 'both'` | The only implementation of the duration formula; used by both views |
 | `v_plan_item` | view | Items of a **blueprint**: `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `exercise_id`, `side`, `reps_count`, `duration_sec` | Plan check BR1–BR8 on the blueprint (plan review); plan duration for BR8 = `sum(duration_sec)` |
+| `v_exercise_variation` | view | Variation pairs: `exercise_id`, `variation_id`, `family_id` — different exercises that share a family, both directions, one row per shared family | The variation graph as pairs (explanations, debugging). The candidate search reads `exercise_family_member` directly (one hop). |
 | `v_session_plan` | view | Items of the **concrete plan of a session**: `session_id`, `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `exercise_id` (effective, after accepted replacements), `original_exercise_id`, `is_replaced`, `replacement_recommendation_id`, `alternative_exercise_ids` (accepted alternatives, shown next to the original), `side`, `reps_count`, `duration_sec` (of the effective exercise) | Session view (US5.2); BR1–BR8 check on the concrete plan (session review) |
 | `plan_is_locked(plan_id)` | function | `true` when any session uses the plan | Lock trigger (DQ31); the UI shows a locked plan as read-only and offers "duplicate" |
 | `duplicate_plan(plan_id, title = NULL)` | function | Id of a new `draft` plan with the same coach, notes, target duration and items. Default title: `<title> (copy)`. Raises `P0002` if the plan does not exist. | Changing a locked plan (T9). Runs with the caller's rights; the API checks that the caller owns the plan. |

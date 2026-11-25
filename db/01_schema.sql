@@ -20,7 +20,7 @@ CREATE TYPE exercise_mode       AS ENUM ('dynamic', 'static', 'stato_dynamic');
 CREATE TYPE starting_pose       AS ENUM ('seated', 'standing', 'balance', 'quadruped', 'downward_dog',
                                          'supine', 'prone', 'kneeling', 'front_split');
 CREATE TYPE side                AS ENUM ('left', 'right', 'both');
-CREATE TYPE relation_type       AS ENUM ('variation', 'progression');
+CREATE TYPE relation_type       AS ENUM ('progression');   -- variations are not stored (v_exercise_variation)
 CREATE TYPE load_level          AS ENUM ('low', 'medium', 'high');
 CREATE TYPE energy_level        AS ENUM ('low', 'normal', 'high');
 CREATE TYPE plan_status         AS ENUM ('draft', 'completed', 'reviewed');
@@ -210,18 +210,17 @@ CREATE TABLE exercise_compensation (
         FOREIGN KEY (compensation_exercise_id) REFERENCES exercise (id) ON DELETE RESTRICT
 );
 
+-- Progression graph (directed, easier -> harder). The variation graph is
+-- NOT stored here: it is a star around each family (exercise_family +
+-- exercise_family_member); pairs are shown by the view v_exercise_variation.
 CREATE TABLE exercise_relation (
     id                integer       GENERATED ALWAYS AS IDENTITY,
     from_exercise_id  integer       NOT NULL,
     to_exercise_id    integer       NOT NULL,
-    type              relation_type NOT NULL,
-    is_directed       boolean       NOT NULL DEFAULT true,
+    type              relation_type NOT NULL DEFAULT 'progression',
     is_manual         boolean       NOT NULL DEFAULT false,
     CONSTRAINT pk_exercise_relation PRIMARY KEY (id),
     CONSTRAINT ck_exercise_relation_not_self CHECK (from_exercise_id <> to_exercise_id),
-    -- an undirected edge is stored once, with the smaller id first
-    CONSTRAINT ck_exercise_relation_undirected_order
-        CHECK (is_directed OR from_exercise_id < to_exercise_id),
     CONSTRAINT fk_exercise_relation_from
         FOREIGN KEY (from_exercise_id) REFERENCES exercise (id) ON DELETE CASCADE,
     CONSTRAINT fk_exercise_relation_to
@@ -381,17 +380,16 @@ CREATE TABLE recommendation_decision (
 -- The indexes below support the main queries and FK checks.
 -- ---------------------------------------------------------------------
 
--- DQ36: at most one edge of each type per pair of exercises. A pair may be
--- in both graphs (a variation AND a progression), but never has two
--- variations or progressions in both directions (A -> B and B -> A would
--- be a two-exercise progression cycle).
+-- DQ36: at most one progression per pair of exercises, whatever the
+-- direction: no duplicate edge, and A -> B and B -> A never both exist (a
+-- two-exercise cycle). Includes UNIQUE (from, to, type).
 CREATE UNIQUE INDEX uq_exercise_relation_pair_type
     ON exercise_relation (LEAST(from_exercise_id, to_exercise_id), GREATEST(from_exercise_id, to_exercise_id), type);
--- recursive candidate search (WITH RECURSIVE over the exercise graph)
+-- progressions forwards (future "harder alternatives") and FK checks
 CREATE INDEX ix_exercise_relation_from_type ON exercise_relation (from_exercise_id, type);
--- undirected edges are also followed backwards
+-- regressions: progressions followed backwards (WITH RECURSIVE, depth <= 2)
 CREATE INDEX ix_exercise_relation_to        ON exercise_relation (to_exercise_id);
--- "members of family X" (candidate search: shared family) and FK checks
+-- variations: members of the original's families (one hop) and FK checks
 CREATE INDEX ix_exercise_family_member_family ON exercise_family_member (family_id);
 -- "which exercises does X compensate" and FK checks (RESTRICT on delete)
 CREATE INDEX ix_exercise_compensation_compensation ON exercise_compensation (compensation_exercise_id);
@@ -429,10 +427,10 @@ COMMENT ON TABLE rule                    IS 'Business rules BR1–BR11 (id = BR 
 COMMENT ON TABLE exercise                IS 'Exercise library (loaded by the library import)';
 COMMENT ON TABLE exercise_muscle         IS 'Muscles of an exercise (M:N); primary = the stretched (target) muscle';
 COMMENT ON TABLE exercise_joint          IS 'Joints involved in an exercise (M:N) with their load level';
-COMMENT ON TABLE exercise_family         IS 'Movement family: exercises that can stand in for each other';
+COMMENT ON TABLE exercise_family         IS 'Movement family = hub of the variation graph: members are variations of each other';
 COMMENT ON TABLE exercise_family_member  IS 'Families of an exercise (M:N; up to three in the library sheet)';
 COMMENT ON TABLE exercise_compensation   IS 'Acceptable compensating exercises of an exercise (BR6; any one satisfies the rule)';
-COMMENT ON TABLE exercise_relation       IS 'Edges of two graphs over the same exercises: variation (same movement) and progression (harder version); a pair may have both';
+COMMENT ON TABLE exercise_relation       IS 'Progression graph: from -> to = a harder version (backwards = regression); variations are not stored (see v_exercise_variation)';
 COMMENT ON TABLE plan                    IS 'Plan blueprint built by the coach; checked by BR1–BR8 and reviewed before use';
 COMMENT ON TABLE plan_item               IS 'Exercise at a position within a phase of a plan';
 COMMENT ON TABLE session                 IS 'One class: a reviewed plan + decisions on recommendations + time, group, check-ins, attendance';
@@ -447,8 +445,7 @@ COMMENT ON COLUMN exercise.is_symmetric             IS 'false = asymmetric, perf
 COMMENT ON COLUMN exercise.rep_duration_sec         IS 'Whole seconds for ONE repetition; for a static exercise one repetition = one hold';
 COMMENT ON COLUMN exercise_joint.is_primary         IS 'Main joint of the exercise; used for sorting, filtering, display (not by the rules)';
 COMMENT ON COLUMN exercise_joint.load_level         IS 'Load on this joint, main or secondary: BR9/BR10 (high triggers), BR11 cascade, graph derivation';
-COMMENT ON COLUMN exercise_relation.is_directed     IS 'false = edge followed both ways; stored once with from < to';
-COMMENT ON COLUMN exercise_relation.is_manual       IS 'false = derived on import from families and attributes; true = manual progression';
+COMMENT ON COLUMN exercise_relation.is_manual       IS 'false = derived on import (harder by an attribute, easier by none); true = manual progression from the sheet';
 COMMENT ON COLUMN plan.target_duration_min          IS 'Planned class length in minutes (BR8: calculated duration within ±5 min); required unless draft';
 COMMENT ON COLUMN plan.status                       IS 'draft / completed / reviewed (BR1–BR8 check run and reviewed by the coach)';
 COMMENT ON COLUMN plan_item.reps_count              IS 'Repetitions: per side for an asymmetric exercise, total for a symmetric one; duration is calculated, see item_duration_sec()';

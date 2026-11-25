@@ -80,7 +80,7 @@ Nobody except the owner `kinetune_migrator` can run DDL, `TRUNCATE` or disable t
 
 | Object | app_read | app_write | Rights when it runs |
 |---|---|---|---|
-| `v_plan_item`, `v_session_plan` (views) | SELECT | (inherited) | Owner's rights for tables; read-only |
+| `v_plan_item`, `v_session_plan`, `v_exercise_variation` (views) | SELECT | (inherited) | Owner's rights for tables; read-only |
 | `item_duration_sec()` | EXECUTE | (inherited) | Caller; reads no table. Needed by readers of the views (a view's functions are checked against the reader) |
 | `plan_is_locked()` | EXECUTE | (inherited) | Caller; fixed `search_path` |
 | `duplicate_plan()` | — | EXECUTE | **Caller** (`kinetune_api`): it inserts with the backend's own grants; the API checks that the caller owns the plan |

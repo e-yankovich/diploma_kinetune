@@ -199,7 +199,8 @@ SELECT pg_temp.expect_fail('edit the exercise library',             $q$INSERT IN
 SELECT pg_temp.expect_fail('change a joint load level',             $q$UPDATE exercise_joint SET load_level = 'high' WHERE exercise_id = 9001$q$);
 SELECT pg_temp.expect_fail('create an exercise family',             $q$INSERT INTO exercise_family (name) VALUES ('priv family')$q$);
 SELECT pg_temp.expect_fail('add a compensation',                    $q$INSERT INTO exercise_compensation VALUES (9002, 9001)$q$);
-SELECT pg_temp.expect_fail('add a graph edge',                      $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (9001, 9002, 'variation', false)$q$);
+SELECT pg_temp.expect_fail('add a graph edge',                      $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (9001, 9002)$q$);
+SELECT pg_temp.expect_ok  ('read variation pairs',                  $q$SELECT * FROM v_exercise_variation$q$);
 SELECT pg_temp.expect_fail('views are read-only',                   $q$DELETE FROM v_plan_item$q$);
 SELECT pg_temp.expect_fail('edit rule texts',                       $q$UPDATE rule SET explanation = 'x' WHERE id = 9$q$);
 SELECT pg_temp.expect_fail('edit permissions',                      $q$INSERT INTO role_permission VALUES (1, 10)$q$);
@@ -228,6 +229,7 @@ SELECT pg_temp.expect_fail('SELECT * from app_user',                $q$SELECT * 
 SELECT pg_temp.expect_fail('insert a check-in',                     $q$INSERT INTO checkin (session_id, energy, poor_sleep, language) VALUES (9002, 'normal', false, 'en')$q$);
 SELECT pg_temp.expect_fail('update a plan',                         $q$UPDATE plan SET title = 'x'$q$);
 SELECT pg_temp.expect_ok  ('read the concrete plan of a session',   $q$SELECT * FROM v_session_plan$q$);
+SELECT pg_temp.expect_ok  ('read variation pairs',                  $q$SELECT * FROM v_exercise_variation$q$);
 SELECT pg_temp.expect_ok  ('calculate an item duration',            $q$SELECT item_duration_sec(4, 15, false, 'both')$q$);
 SELECT pg_temp.expect_ok  ('check the plan lock',                   $q$SELECT plan_is_locked(9001)$q$);
 SELECT pg_temp.expect_fail('duplicate a plan',                      $q$SELECT duplicate_plan(9001)$q$);
@@ -253,7 +255,7 @@ SET ROLE app_admin;
 SELECT pg_temp.expect_ok  ('edit the exercise library',             $q$UPDATE exercise SET description = 'updated' WHERE id = 9001$q$);
 SELECT pg_temp.expect_ok  ('create a family and add members',       $q$WITH f AS (INSERT INTO exercise_family (name) VALUES ('priv family') RETURNING id) INSERT INTO exercise_family_member SELECT e, f.id FROM f, unnest(ARRAY[9001, 9002]) e$q$);
 SELECT pg_temp.expect_ok  ('add a compensation',                    $q$INSERT INTO exercise_compensation VALUES (9002, 9001)$q$);
-SELECT pg_temp.expect_ok  ('add a graph edge',                      $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (9001, 9002, 'variation', false)$q$);
+SELECT pg_temp.expect_ok  ('add a graph edge',                      $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (9001, 9002)$q$);
 SELECT pg_temp.expect_ok  ('edit rule texts',                       $q$UPDATE rule SET explanation = explanation || ' ' WHERE id = 9$q$);
 SELECT pg_temp.expect_fail('DDL is still not allowed',              $q$ALTER TABLE kinetune.exercise ADD COLUMN x int$q$);
 RESET ROLE;

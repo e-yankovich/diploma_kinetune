@@ -84,7 +84,7 @@ REVOKE SELECT ON app_user FROM app_read;
 GRANT  SELECT (id, display_name, is_active, created_at, last_login_at) ON app_user TO app_read;
 -- not granted: app_user.email, app_user.password_hash
 -- views of calculated data (also covered by ALL TABLES; stated explicitly)
-GRANT  SELECT ON v_plan_item, v_session_plan TO app_read;
+GRANT  SELECT ON v_plan_item, v_session_plan, v_exercise_variation TO app_read;
 
 -- ---------------------------------------------------------------------
 -- 4. app_write: what the backend needs, nothing more

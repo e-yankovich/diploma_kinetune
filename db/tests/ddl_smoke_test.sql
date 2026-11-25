@@ -72,12 +72,23 @@ INSERT INTO exercise_compensation VALUES (2, 1), (2, 5);
 SELECT pg_temp.expect_true('an exercise can have several compensating exercises (BR6)',
   (SELECT count(*) = 2 FROM exercise_compensation WHERE exercise_id = 2));
 
-INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed)
-  VALUES (2, 3, 'variation', false);
-INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed, is_manual)
-  VALUES (3, 4, 'progression', true, true);
-SELECT pg_temp.expect_true('exercise_relation.is_manual defaults to false (derived edge)',
-  (SELECT NOT is_manual FROM exercise_relation WHERE type = 'variation'));
+-- variation graph = star around each family: nothing stored per pair
+SELECT pg_temp.expect_true('v_exercise_variation: family members are variations, both directions',
+  (SELECT array_agg(exercise_id || '-' || variation_id ORDER BY exercise_id, variation_id)
+          = ARRAY['1-5', '2-3', '3-2', '5-1']
+     FROM v_exercise_variation));
+SELECT pg_temp.expect_true('v_exercise_variation: no pair across families, no self-pair',
+  NOT EXISTS (SELECT 1 FROM v_exercise_variation
+               WHERE exercise_id = variation_id OR (exercise_id, variation_id) IN ((2, 1), (3, 5))));
+
+-- progression graph: directed edges only (automatic and manual)
+INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (3, 2);          -- automatic
+INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, is_manual) VALUES (3, 4, true);
+SELECT pg_temp.expect_true('exercise_relation: type defaults to progression, is_manual to false',
+  (SELECT type = 'progression' AND NOT is_manual FROM exercise_relation WHERE (from_exercise_id, to_exercise_id) = (3, 2)));
+SELECT pg_temp.expect_true('a pair can be in both graphs (shared family + progression 3 -> 2)',
+  EXISTS (SELECT 1 FROM v_exercise_variation v JOIN exercise_relation r
+                    ON (r.from_exercise_id, r.to_exercise_id) = (v.exercise_id, v.variation_id)));
 
 INSERT INTO plan (coach_id, title) VALUES (1, 'Tuesday stretch');                -- plan 1
 INSERT INTO plan_item (plan_id, exercise_id, phase, position, side, reps_count) VALUES
@@ -279,21 +290,15 @@ SELECT pg_temp.expect_fail('family name not blank',
 SELECT pg_temp.expect_fail('family with members cannot be deleted (RESTRICT)',
   $q$DELETE FROM exercise_family WHERE name = 'spine mobility'$q$);
 SELECT pg_temp.expect_fail('relation not self',
-  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type) VALUES (1,1,'variation')$q$);
-SELECT pg_temp.expect_fail('undirected edge stored with from < to',
-  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (4,1,'variation',false)$q$);
--- a pair can be in both graphs: half kneel lunge (3) and deep lunge (2) are
--- variations, and the deep lunge is also the harder version (progression 3 -> 2)
-INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (3, 2, 'progression', true);
-SELECT pg_temp.expect_true('a pair can be both a variation and a progression',
-  (SELECT count(*) = 2 FROM exercise_relation WHERE LEAST(from_exercise_id, to_exercise_id) = 2
-                                               AND GREATEST(from_exercise_id, to_exercise_id) = 3));
+  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (1,1)$q$);
+SELECT pg_temp.expect_fail('variation edges cannot be stored (relation_type = progression only)',
+  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type) VALUES (1,5,'variation')$q$);
 SELECT pg_temp.expect_fail('DQ36 no progressions in both directions (2 -> 3 next to 3 -> 2)',
-  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (2,3,'progression',true)$q$);
+  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (2,3)$q$);
 SELECT pg_temp.expect_fail('DQ36 no reverse of a manual progression (4 -> 3 next to 3 -> 4)',
-  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (4,3,'progression',true)$q$);
-SELECT pg_temp.expect_fail('DQ36 the same variation twice',
-  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed) VALUES (2,3,'variation',false)$q$);
+  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id) VALUES (4,3)$q$);
+SELECT pg_temp.expect_fail('DQ36 the same progression twice',
+  $q$INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, is_manual) VALUES (3,2,true)$q$);
 SELECT pg_temp.expect_fail('warning <=> no candidate',
   $q$INSERT INTO recommendation (session_id, plan_item_id, rule_id, form, is_warning, candidate_exercise_id, affected_count, explanation, explanation_source) VALUES (1,2,9,'alternative',true,3,1,'x','template')$q$);
 SELECT pg_temp.expect_fail('one decision per recommendation',

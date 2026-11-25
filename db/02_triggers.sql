@@ -683,6 +683,23 @@ SELECT s.id                                                    AS session_id,
   -- warnings (BR11) change nothing; the duration is that of the effective exercise
   JOIN exercise e ON e.id = COALESCE(rep.candidate_exercise_id, pi.exercise_id);
 
+-- ---------------------------------------------------------------------
+-- Variation graph: a star around each family (bipartite exercise —
+-- family graph). Two exercises are variations iff they share a family;
+-- the pairs are derived here, never stored. One row per pair, direction
+-- and shared family (a pair in two families appears once per family).
+-- Candidate search: variations = members of the original's families,
+-- one hop through the family, no recursion (business rules v2, BR11).
+-- ---------------------------------------------------------------------
+CREATE VIEW v_exercise_variation AS
+SELECT a.exercise_id,
+       b.exercise_id AS variation_id,
+       a.family_id
+  FROM exercise_family_member a
+  JOIN exercise_family_member b
+    ON b.family_id = a.family_id
+   AND b.exercise_id <> a.exercise_id;
+
 COMMENT ON FUNCTION item_duration_sec(integer, integer, boolean, side) IS
     'Item duration in seconds: reps x rep duration, x2 for an asymmetric exercise with side both';
 COMMENT ON FUNCTION plan_is_locked(integer) IS
@@ -691,5 +708,7 @@ COMMENT ON FUNCTION duplicate_plan(integer, text) IS
     'Copies a plan and its items into a new draft plan; returns the new plan id';
 COMMENT ON VIEW v_plan_item IS
     'Blueprint item list in class order with calculated duration; input of the BR1–BR8 plan check';
+COMMENT ON VIEW v_exercise_variation IS
+    'Variation pairs: different exercises that share a family, both directions, one row per shared family';
 COMMENT ON VIEW v_session_plan IS
     'Concrete plan of a session: blueprint + accepted replacements (swap) and alternatives (next to the original); input of the BR1–BR8 session check';

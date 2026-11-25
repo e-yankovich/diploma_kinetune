@@ -1,12 +1,12 @@
 # Kinetune — Exercise Library Import
 
-The exercise library is kept by the author in a spreadsheet. The import script loads it into the database and **derives the two exercise graphs** (variations and progressions) from exercise families and attributes.
+The exercise library is kept by the author in a spreadsheet. The import script loads it into the database and builds the two exercise graphs: the **variation graph** is the family membership itself (a star around each family, nothing stored per pair), and the **progression graph** is derived from exercise attributes and stored as directed edges.
 
 | | |
 |---|---|
 | Script | `db/library/import_library.py` (Python, openpyxl + psycopg) |
 | Input | The workbook `db/library/kinetune_library.xlsx` (sheets "Library" and "Progressions (manual)") |
-| Writes | `exercise`, `exercise_family`, `exercise_family_member`, `exercise_joint`, `exercise_muscle`, `exercise_compensation`, `exercise_relation` |
+| Writes | `exercise`, `exercise_family`, `exercise_family_member`, `exercise_joint`, `exercise_muscle`, `exercise_compensation`, `exercise_relation` (progressions only) |
 | Needs | Migrations applied (reference data: joints, muscles); a role with `app_admin` rights on the library tables (`kinetune_admin`) |
 | Transaction | One. Any problem → nothing is written and **all** problems are printed together |
 
@@ -76,7 +76,7 @@ Once the coach has built plans, the library cannot be deleted (`--replace` is re
 | Exercise only in the database, **not used** by any plan item or recommendation | Deleted. |
 | Exercise only in the database, **used** | Deactivated (`is_active = false`, warning) and kept with its joints, muscles, families and compensations, so old plans and sessions can still be checked (BR1–BR9). It is never offered as a candidate. If it comes back to the sheet later, it is matched by name and reactivated by the sheet. |
 | Families | New names are created; families left without members are deleted. |
-| Graph edges | Always rebuilt from the sheet (they are derived data). Inactive exercises get no edges. |
+| Progression edges | Always rebuilt from the sheet (they are derived data). An exercise that is not in the sheet gets no edges. Variations need no rebuild: they follow the family membership. |
 
 Rules that protect existing plans:
 - An exercise that existing plans use with `side` left/right cannot become symmetric (DQ25): error, nothing written.
@@ -137,7 +137,7 @@ All problems are collected and printed together, each with sheet, row, column an
 ```text
 ERROR   Library, row 4, column "Main joint 1", value 'ankel': unknown joint (did you mean "ankle"?)
 ERROR   Library, row 6, column "Load: knee", value 'medium': load is filled for the joint "knee", which is not listed as a main or secondary joint of this row
-WARNING Library, row 47, column "Family", value 'hip mobility': family has only one exercise, so it gives no graph edges (check the spelling?) (DQ35)
+WARNING Library, row 47, column "Family", value 'hip mobility': family has only one exercise, so its member has no variations through it (check the spelling?) (DQ35)
 ```
 
 | Check | Level |
@@ -160,7 +160,12 @@ After validation the rows are inserted; the database constraints (CHECK, UNIQUE,
 
 ## 4. Graph derivation
 
-Business rules v2, "Exercise graphs". The two graphs are independent: a pair of exercises can be in both.
+Business rules v2, "Exercise graphs". The two graphs are independent, a pair of exercises can be in both, and they are stored in two different structures:
+
+| Graph | Meaning | Storage |
+|---|---|---|
+| Variation graph | Similarity: "another execution of the same movement", any level | A **star around each family** (bipartite exercise — family graph): `exercise_family` + `exercise_family_member`. Two exercises are variations **iff they share a family**. Nothing is stored per pair; the view `v_exercise_variation` lists the pairs. |
+| Progression graph | Difficulty: "B is a harder version of A" | Directed edges in `exercise_relation` (`type = 'progression'`, `is_manual`) |
 
 **Harder by an attribute.** Exercise B is harder than A by an attribute if:
 - **difficulty**: B's difficulty is higher;
@@ -171,23 +176,25 @@ Business rules v2, "Exercise graphs". The two graphs are independent: a pair of 
 B is *easier* by an attribute in the opposite cases. One attribute can make B both harder and easier (e.g. a higher load on the knee and a lower load on the hip).
 
 **For every pair (A, B) that shares at least one family:**
-1. a **variation** A — B (undirected, stored once with the smaller id first, `is_manual = false`);
-2. **in addition**, if B is harder by at least one attribute and easier by none → a **progression** A → B (`is_manual = false`); in the opposite case → B → A;
+1. the pair is a **variation**, implicitly through the family (no row is written);
+2. **in addition**, if B is harder by at least one attribute and easier by none → a stored **progression** A → B (`is_manual = false`); in the opposite case → B → A;
 3. harder by one attribute and easier by another → variation only.
 
-The result depends only on the two exercises, so a pair that shares two families gets the same edges once. "Harder" is a strict comparison, so automatic progressions never form a cycle.
+The result depends only on the two exercises, so a pair that shares two families gets at most one progression. "Harder" is a strict comparison, so automatic progressions never form a cycle.
 
-**Manual progressions** (sheet "Progressions (manual)") add a progression A → B with `is_manual = true`; the variation edge of a pair that shares a family stays.
+**Manual progressions** (sheet "Progressions (manual)") add a progression A → B with `is_manual = true`; if the two exercises share a family, they stay variations as well.
 - Same direction as an automatic progression → the existing edge is marked manual (one progression per pair).
 - Opposite direction → the manual edge replaces the automatic one (expert judgement wins); the import prints an `INFO` line.
 - A manual progression that would create a cycle (with all progressions, automatic and manual) is an error.
 
 Example (family "ankle mobility"): every pair is a variation; in addition Ankle Circles – Seated → Ankle Circles – Standing is a progression (balance on one leg). Ankle Circles – Standing and Ankle Flexion and Extension – Standing are a variation only: the standing circles need balance, the flexion/extension puts a load on the foot.
 
-**Summary.** At the end the script prints: exercises (and inactive), families, family memberships, joint links, muscle links, compensations, automatic variations, automatic progressions, manual progressions (and how many replace an automatic one), and pairs in both graphs.
+**How the backend searches candidates** (BR11; for reference): variations = members of the original's families (one hop through the family, no recursion); regressions = progressions followed backwards, up to 2 steps, with a cycle guard; a progression of the original (a harder version) is never offered, even if it is also a variation.
+
+**Summary.** At the end the script prints: exercises (and inactive; with `--update` also added, changed, unchanged, deleted, deactivated), families, family memberships, joint links, muscle links, compensations, variation pairs (counted from `v_exercise_variation`, not stored), automatic progressions, manual progressions (and how many replace an automatic one), and pairs in both graphs.
 
 ---
 
 ## 5. Current library (import of 25 Nov 2026)
 
-99 exercises (all active), 20 families, 150 family memberships, 228 joint links, 223 muscle links, 69 compensations, 595 variations, 255 automatic progressions, 0 manual progressions; all 255 progression pairs are also variations. Warnings: the families "hip mobility" and "wrist mobility" have one exercise each.
+99 exercises (all active), 20 families, 150 family memberships, 228 joint links, 223 muscle links, 69 compensations; 595 variation pairs (derived from the families, not stored); 255 automatic progressions and 0 manual progressions stored in `exercise_relation`; all 255 progression pairs are also variations. Warnings: the families "hip mobility" and "wrist mobility" have one exercise each; this is intended by the author (DQ35 stays a warning).

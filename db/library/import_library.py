@@ -151,7 +151,7 @@ class Reference:
 
 @dataclass
 class Edges:
-    variations: set[frozenset]                    # unordered pairs of names
+    family_pairs: set[frozenset]                  # pairs sharing a family (variations; not stored)
     progressions: dict[tuple[str, str], bool]     # (easier, harder) -> is_manual
     overridden: list[tuple[ManualProgression, tuple[str, str]]]
 
@@ -455,7 +455,7 @@ def check_library_links(exercises: list[Exercise], report: Report) -> None:
     for fam, exs in members.items():
         if len(exs) < 2:
             report.warning(sheet, exs[0].row, "Family", fam,
-                           "family has only one exercise, so it gives no graph edges (check the spelling?) (DQ35)")
+                           "family has only one exercise, so its member has no variations through it (check the spelling?) (DQ35)")
     for ex in exercises:
         if not ex.families:
             report.warning(sheet, ex.row, "Family 1", None, "exercise has no family: it can only be linked by manual progressions")
@@ -535,15 +535,15 @@ def derive_edges(exercises: list[Exercise], manual: list[ManualProgression], rep
         for fam in ex.families:
             members[fam].append(ex.name)
 
-    variations: set[frozenset] = set()
+    family_pairs: set[frozenset] = set()
     progressions: dict[tuple[str, str], bool] = {}
     for names in members.values():
         for i, name_a in enumerate(names):
             for name_b in names[i + 1:]:
                 pair = frozenset((name_a, name_b))
-                if pair in variations:
+                if pair in family_pairs:
                     continue                      # same result in every shared family
-                variations.add(pair)              # every pair in a family is a variation
+                family_pairs.add(pair)            # a variation, implicitly through the family
                 harder, easier = compare(by_name[name_a], by_name[name_b])
                 if harder and not easier:
                     progressions[(name_a, name_b)] = False
@@ -568,7 +568,7 @@ def derive_edges(exercises: list[Exercise], manual: list[ManualProgression], rep
             (mp.easier, mp.harder) == (cycle[i], cycle[i + 1]) for i in range(len(cycle) - 1)))
         report.error(PROGRESSIONS_SHEET, rows[0] if rows else None, None, " -> ".join(cycle),
                      f"manual progressions create a cycle (rows {', '.join(map(str, rows)) or '-'})")
-    return Edges(variations, progressions, overridden)
+    return Edges(family_pairs, progressions, overridden)
 
 
 def find_cycle(progressions: dict[tuple[str, str], bool]) -> list[str] | None:
@@ -744,20 +744,23 @@ def write_links(cur, exercises: list[Exercise], ids: dict[str, int], family_ids:
         "INSERT INTO exercise_compensation (exercise_id, compensation_exercise_id) VALUES (%s, %s)",
         [(ids[ex.name], ids[c]) for ex in exercises for c in ex.compensations])
 
-    variation_rows = []
-    for pair in edges.variations:
-        a, b = sorted(ids[n] for n in pair)            # undirected: smaller id first
-        variation_rows.append((a, b, "variation", False, False))
-    progression_rows = [(ids[e], ids[h], "progression", True, manual)
-                        for (e, h), manual in edges.progressions.items()]
+    # only progressions are stored; variations come from family membership
     cur.executemany(
-        """INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_directed, is_manual)
-           VALUES (%s, %s, %s, %s, %s)""",
-        sorted(variation_rows) + sorted(progression_rows))
+        """INSERT INTO exercise_relation (from_exercise_id, to_exercise_id, type, is_manual)
+           VALUES (%s, %s, 'progression', %s)""",
+        sorted((ids[e], ids[h], manual) for (e, h), manual in edges.progressions.items()))
 
 
-def summarize(exercises: list[Exercise], family_ids: dict[str, int], edges: Edges,
+def summarize(cur, exercises: list[Exercise], edges: Edges,
               counts: dict[str, int], update: bool) -> dict[str, int]:
+    # variation pairs as the database sees them (view over family membership)
+    cur.execute("""SELECT count(DISTINCT (exercise_id, variation_id)) / 2,
+                          (SELECT count(*) FROM exercise_relation r
+                            WHERE EXISTS (SELECT 1 FROM v_exercise_variation v
+                                           WHERE v.exercise_id = r.from_exercise_id
+                                             AND v.variation_id = r.to_exercise_id))
+                     FROM v_exercise_variation""")
+    variation_pairs, in_both = cur.fetchone()
     summary = {
         "exercises in the sheet": len(exercises),
         "  of them inactive": sum(not ex.is_active for ex in exercises),
@@ -776,11 +779,11 @@ def summarize(exercises: list[Exercise], family_ids: dict[str, int], edges: Edge
         "joint links": sum(len(ex.joints) for ex in exercises),
         "muscle links": sum(len(ex.muscles) for ex in exercises),
         "compensations": sum(len(ex.compensations) for ex in exercises),
-        "automatic variations": len(edges.variations),
+        "variation pairs (shared family, not stored)": variation_pairs,
         "automatic progressions": sum(not m for m in edges.progressions.values()),
         "manual progressions": sum(edges.progressions.values()),
         "  of them replacing an automatic one": len(edges.overridden),
-        "pairs in both graphs": sum(1 for (e, h) in edges.progressions if frozenset((e, h)) in edges.variations),
+        "pairs in both graphs": in_both,
     })
     return summary
 
@@ -843,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
             # families that are no longer used by any exercise
             cur.execute("""DELETE FROM exercise_family f
                             WHERE NOT EXISTS (SELECT 1 FROM exercise_family_member m WHERE m.family_id = f.id)""")
-            summary = summarize(exercises, family_ids, edges, counts, args.update)
+            summary = summarize(cur, exercises, edges, counts, args.update)
             if args.dry_run:
                 raise psycopg.Rollback(tx)
     except psycopg.Error as exc:

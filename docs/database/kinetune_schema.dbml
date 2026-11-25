@@ -37,8 +37,8 @@ Enum side {
 }
 
 Enum relation_type {
-  variation    // same movement, another execution, any level (undirected)
-  progression  // from -> to is a harder version (reverse = regression); a pair may have both
+  progression  // from -> to is a harder version (reverse = regression); the only value:
+               // variations are not stored, they come from family membership
 }
 
 Enum session_status {
@@ -148,7 +148,9 @@ Table exercise_joint {
 Table exercise_family {
   id smallint [pk, increment]
   name varchar(64) [unique, not null, note: "CHECK btrim(name) <> ''"]
-  Note: 'Movement family: exercises that can stand in for each other (>= 2 members expected)'
+  Note: '''Movement family = hub of the VARIATION GRAPH (a star around each family,
+bipartite exercise - family): members are variations of each other; no pairwise
+variation edges are stored (pairs: view v_exercise_variation). >= 2 members expected.'''
 }
 
 Table exercise_family_member {
@@ -175,17 +177,16 @@ Table exercise_relation {
   id integer [pk, increment]
   from_exercise_id integer [not null]
   to_exercise_id integer [not null]
-  type relation_type [not null]
-  is_directed boolean [not null, default: true]
-  is_manual boolean [not null, default: false, note: 'false = derived on import (families + attributes); true = manual progression']
+  type relation_type [not null, default: 'progression']
+  is_manual boolean [not null, default: false, note: 'false = derived on import (harder by an attribute, easier by none); true = manual progression']
   indexes {
-    (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`, type) [unique, name: 'uq_exercise_relation_pair_type', note: 'one edge of each type per pair; no progressions both ways (DQ36)']
-    (from_exercise_id, type) [note: 'recursive candidate search']
-    (to_exercise_id) [note: 'undirected edges are also traversed backwards']
+    (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`, type) [unique, name: 'uq_exercise_relation_pair_type', note: 'one progression per pair; no progressions both ways (DQ36); includes UNIQUE (from, to, type)']
+    (from_exercise_id, type) [note: 'forward: future harder alternatives']
+    (to_exercise_id) [note: 'backward: regressions (WITH RECURSIVE, depth <= 2)']
   }
-  Note: '''Graph edges, traversed with WITH RECURSIVE (depth <= 2).
+  Note: '''PROGRESSION GRAPH: directed edges easier (from) -> harder (to); every edge is directed.
 CHECK from_exercise_id <> to_exercise_id.
-Undirected edges stored once: CHECK (is_directed OR from_exercise_id < to_exercise_id).'''
+A pair can also be a variation (shared family): the two graphs are independent.'''
 }
 
 // ───────────── Access control (application roles) ─────────────
@@ -352,6 +353,7 @@ Trigger: at most one accepted replacement per plan item and session.'''
 // item_duration_sec(reps_count, rep_duration_sec, is_symmetric, side) -> integer
 // plan_is_locked(plan_id) -> boolean            (any session uses the plan)
 // duplicate_plan(plan_id, title = NULL) -> new draft plan id
+// v_exercise_variation: exercise_id, variation_id, family_id   (pairs sharing a family, both directions)
 // v_plan_item:    plan_id, plan_item_id, seq, phase, position, exercise_id, side, reps_count, duration_sec
 // v_session_plan: session_id, plan_id, plan_item_id, seq, phase, position,
 //                 exercise_id (effective, after accepted replacement), original_exercise_id, is_replaced,
