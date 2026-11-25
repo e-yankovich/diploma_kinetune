@@ -171,6 +171,15 @@ role: an empty result means every rule holds; `warning` rows are reported but ac
 (the test dataset intentionally produces seven, listed in `test_data.md` §2.6), while any
 `error` row must be fixed.
 
+### Backend and frontend tests
+
+```bash
+cd backend && pip install -r requirements-dev.txt && pytest      # unit + API tests, coverage
+cd frontend && npm ci && npm run test:coverage                    # unit, component, integration
+```
+
+Strategy, coverage numbers and the database tests of the backend: [`docs/testing.md`](docs/testing.md).
+
 ## Changing the schema
 
 1. Add a new migration in `db/migrations/versions/` (e.g. `0005_add_x.py`, with
