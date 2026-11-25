@@ -7,7 +7,7 @@ The exercise library is kept by the author in a spreadsheet. The import script l
 | Script | `db/library/import_library.py` (Python, openpyxl + psycopg) |
 | Input | The workbook `db/library/kinetune_library.xlsx` (sheets "Library" and "Progressions (manual)") |
 | Writes | `exercise`, `exercise_family`, `exercise_family_member`, `exercise_joint`, `exercise_muscle`, `exercise_compensation`, `exercise_relation` |
-| Needs | Migrations applied (reference data: joints, muscles); a role with `app_admin` rights on the library tables |
+| Needs | Migrations applied (reference data: joints, muscles); a role with `app_admin` rights on the library tables (`kinetune_admin`) |
 | Transaction | One. Any problem → nothing is written and **all** problems are printed together |
 
 ---
@@ -25,11 +25,14 @@ docker compose --profile import run --rm import-library /data/kinetune_library.x
 # import into an empty library
 docker compose --profile import run --rm import-library
 
-# replace an existing library (refused if any plan uses its exercises)
+# apply a changed sheet to the existing library (keeps the exercises plans use)
+docker compose --profile import run --rm import-library /data/kinetune_library.xlsx --update
+
+# delete the library and import again (refused if any plan uses its exercises)
 docker compose --profile import run --rm import-library /data/kinetune_library.xlsx --replace
 ```
 
-The service `import-library` uses the `migrate` image, mounts `db/library/` read-only at `/data` and connects as `kinetune_migrator` (the object owner, which has the `app_admin` rights the import needs). It starts only after `migrate` has finished.
+The service `import-library` uses the `migrate` image, mounts `db/library/` read-only at `/data` and connects as **`kinetune_admin`**: a login role that holds the group `app_admin` (library and reference data, no DDL; password `ADMIN_PASSWORD` in `.env`). It starts only after `migrate` has finished.
 
 ### 1.2 Without Docker
 
@@ -46,8 +49,11 @@ DATABASE_URL="postgresql://<role>@localhost:5432/kinetune" \
 | Option | Effect |
 |---|---|
 | (none) | Import into an **empty** library. If the library already has exercises, the script stops. |
+| `--update` | Apply the sheet to the existing library, matching exercises **by name** (section 1.5). Exercise ids are kept, so plans and recommendations stay valid. |
 | `--replace` | Delete the library rows (exercises, families, joint/muscle links, compensations, relations) and import again, in the same transaction. Refused if any `plan_item` references an exercise. |
-| `--dry-run` | Run everything (validation, derivation, inserts, database constraints) and roll back. Prints the summary. Can be combined with `--replace`. |
+| `--dry-run` | Run everything (validation, derivation, inserts, database constraints) and roll back. Prints the summary. Can be combined with `--update` or `--replace`. |
+
+`--update` and `--replace` cannot be used together.
 
 | Exit code | Meaning |
 |---|---|
@@ -58,6 +64,26 @@ DATABASE_URL="postgresql://<role>@localhost:5432/kinetune" \
 ### 1.4 Exporting the sheet
 
 Keep the workbook as `.xlsx` (File → Download → Microsoft Excel in Google Sheets, or Save As `.xlsx` in Excel/LibreOffice) and put it in `db/library/`. Formulas are read as their last calculated values. The workbook is not part of the Docker image; it is mounted when the import runs.
+
+### 1.5 Updating a library that plans already use (`--update`)
+
+Once the coach has built plans, the library cannot be deleted (`--replace` is refused), but the sheet can still change. `--update` applies it in one transaction:
+
+| Sheet vs database | What happens |
+|---|---|
+| Exercise in both (same name) | Its attributes are updated **in place**; the id stays, so plan items and recommendations keep pointing to it. Its joints, muscles, families and compensations are rebuilt from the sheet. |
+| Exercise only in the sheet | Inserted (new id). |
+| Exercise only in the database, **not used** by any plan item or recommendation | Deleted. |
+| Exercise only in the database, **used** | Deactivated (`is_active = false`, warning) and kept with its joints, muscles, families and compensations, so old plans and sessions can still be checked (BR1–BR9). It is never offered as a candidate. If it comes back to the sheet later, it is matched by name and reactivated by the sheet. |
+| Families | New names are created; families left without members are deleted. |
+| Graph edges | Always rebuilt from the sheet (they are derived data). Inactive exercises get no edges. |
+
+Rules that protect existing plans:
+- An exercise that existing plans use with `side` left/right cannot become symmetric (DQ25): error, nothing written.
+- Renaming an exercise in the sheet means a new exercise: the old name is deleted, or deactivated if it is used.
+- Changing an exercise changes the calculated values (duration, plan check) of the plans that use it; the library is the single source of exercise data (data dictionary §7).
+
+The summary also shows how many exercises were added, changed, unchanged, deleted and deactivated.
 
 ---
 

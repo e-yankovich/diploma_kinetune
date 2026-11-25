@@ -23,9 +23,10 @@ These are **PostgreSQL roles**: they decide what a database connection may do. T
 
 | Login role | Group | Used by | Attributes |
 |---|---|---|---|
-| `kinetune_migrator` | — (owns all objects) | Migrations (`migrate` service), library import, test seed | `CREATEROLE` only to manage the `app_*` groups; owner of the database |
+| `kinetune_migrator` | — (owns all objects) | Migrations (`migrate` service), test seed | `CREATEROLE` only to manage the `app_*` groups; owner of the database |
 | `kinetune_api` | `app_write` | FastAPI backend | Connection limit 20; `statement_timeout` 5 s, `lock_timeout` 2 s, `idle_in_transaction_session_timeout` 10 s |
 | `kinetune_reader` | `app_read` | Reports, analysis | Connection limit 5; read-only transactions; `statement_timeout` 30 s |
+| `kinetune_admin` | `app_admin` | Library import (`import-library` service), edits of reference data | Connection limit 2; `statement_timeout` 60 s, `lock_timeout` 5 s; no DDL, not the object owner |
 
 No application role is a superuser or has `BYPASSRLS` / `REPLICATION` (checked by the test). Passwords are stored as SCRAM-SHA-256 verifiers.
 
@@ -39,7 +40,7 @@ app_admin  ⊃  app_write  ⊃  app_read        (each includes the one below)
 |---|---|
 | `app_read` | Read everything except personal data of accounts (`app_user.email`, `password_hash`) |
 | `app_write` | The backend: writes operational data (plans, sessions, check-ins, recommendations, decisions) |
-| `app_admin` | Maintenance: additionally edits reference data and the exercise library. No DDL. Granted to a named person's login only when needed. |
+| `app_admin` | Maintenance: additionally edits reference data and the exercise library. No DDL. Held by `kinetune_admin`. |
 
 ### 2.3 Creating the group roles safely
 

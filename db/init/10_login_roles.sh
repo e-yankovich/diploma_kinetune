@@ -8,10 +8,12 @@ set -euo pipefail
 : "${MIGRATOR_PASSWORD:?MIGRATOR_PASSWORD is not set}"
 : "${API_PASSWORD:?API_PASSWORD is not set}"
 : "${READER_PASSWORD:?READER_PASSWORD is not set}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is not set}"
 
 psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
      -v db="$POSTGRES_DB" \
      -v migrator_pw="$MIGRATOR_PASSWORD" \
      -v api_pw="$API_PASSWORD" \
      -v reader_pw="$READER_PASSWORD" \
+     -v admin_pw="$ADMIN_PASSWORD" \
      -f /docker-entrypoint-initdb.d/login_roles.psql

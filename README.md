@@ -46,7 +46,7 @@ On the **first** `docker compose up` (empty data volume):
 
 1. The `db` container initialises PostgreSQL and, from `db/init/`, runs
    `10_login_roles.sh` **once** to create the non-superuser login roles
-   (`kinetune_migrator`, `kinetune_api`, `kinetune_reader`) with passwords from `.env`,
+   (`kinetune_migrator`, `kinetune_api`, `kinetune_reader`, `kinetune_admin`) with passwords from `.env`,
    and transfers ownership of the database to `kinetune_migrator`.
 2. `db` reports healthy (`pg_isready` over TCP).
 3. `migrate` (one-shot container) connects **as `kinetune_migrator`** and runs
@@ -80,7 +80,7 @@ Useful commands (run from the repository root):
 ## Roles and access
 
 The cluster **superuser** (`POSTGRES_USER`, e.g. `postgres`) is used only to bootstrap
-and for maintenance — never by the application or by migrations. Three **login roles**
+and for maintenance — never by the application or by migrations. Four **login roles**
 carry no privileges directly; they inherit from NOLOGIN **group roles**:
 
 | Login role | Group | Used by | Access |
@@ -88,6 +88,7 @@ carry no privileges directly; they inherit from NOLOGIN **group roles**:
 | `kinetune_migrator` | owns all objects | migrations | DDL + full DML on its objects (not a superuser) |
 | `kinetune_api` | `app_write` | FastAPI backend | writes operational data; reference data & library are read-only |
 | `kinetune_reader` | `app_read` | reports / analysis | read-only; cannot read `app_user.email` or `password_hash` |
+| `kinetune_admin` | `app_admin` | library import, reference data | library and reference data writable; no DDL |
 
 `app_admin ⊃ app_write ⊃ app_read`. `app_admin` additionally maintains reference data and
 the exercise library (no DDL). New tables are readable by `app_read` automatically via
@@ -144,7 +145,7 @@ scratch database, so it connects as the **superuser**):
 # DDL: constraints and triggers  (expected: 86 lines PASS, no FAIL)
 PGHOST=localhost PGPORT=${DB_PORT} PGUSER=postgres PGPASSWORD=... db/tests/run_ddl_test.sh
 
-# Roles and privileges  (run after the migrations; own fixture rows; expected: 72 PASS, no FAIL)
+# Roles and privileges  (run after the migrations; own fixture rows; expected: 79 PASS, no FAIL)
 psql "host=localhost port=${DB_PORT} user=postgres dbname=kinetune" \
      -v ON_ERROR_STOP=1 -f db/tests/privileges_test.sql
 
@@ -177,7 +178,7 @@ Existing migrations are never edited after they have been applied anywhere.
 
 - `.env` is git-ignored; only `.env.example` with placeholders is committed. It holds:
   - `POSTGRES_USER` / `POSTGRES_PASSWORD` — the cluster superuser (bootstrap/maintenance).
-  - `MIGRATOR_PASSWORD`, `API_PASSWORD`, `READER_PASSWORD` — the three login roles.
+  - `MIGRATOR_PASSWORD`, `API_PASSWORD`, `READER_PASSWORD`, `ADMIN_PASSWORD` — the four login roles.
 - No application role is a superuser or can bypass RLS; the `migrate` container runs as a
   non-root OS user and connects as the non-superuser owner `kinetune_migrator`.
 - Role passwords are stored as SCRAM-SHA-256 verifiers; user passwords as argon2id (enforced

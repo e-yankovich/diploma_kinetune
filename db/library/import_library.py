@@ -2,7 +2,11 @@
 """Kinetune library import: loads the exercise library from the author's spreadsheet.
 
 Usage:
-    python db/library/import_library.py db/library/kinetune_library.xlsx [--dry-run] [--replace]
+    python db/library/import_library.py db/library/kinetune_library.xlsx [--dry-run] [--replace | --update]
+
+Modes: (default) import into an empty library; --replace deletes the library
+and imports again (refused while plans use it); --update applies the sheet to
+an existing library by exercise name and keeps the ids that plans refer to.
 
 Connection: DATABASE_URL (a libpq URL or "key=value" string). If it is not set,
 the standard PG* variables are used (PGHOST, PGPORT, PGDATABASE, PGUSER,
@@ -610,44 +614,122 @@ def load_reference(cur) -> Reference:
     return Reference(joints, muscles, modes, poses)
 
 
-def prepare_library(cur, replace: bool) -> str | None:
-    """Empty library -> None. Otherwise delete it (--replace) or return the reason to stop."""
-    cur.execute("LOCK TABLE exercise IN SHARE ROW EXCLUSIVE MODE")   # one import at a time
+def lock_library(cur) -> int:
+    """One import at a time; returns the number of exercises already in the library."""
+    cur.execute("LOCK TABLE exercise IN SHARE ROW EXCLUSIVE MODE")
     cur.execute("SELECT count(*) FROM exercise")
-    count = cur.fetchone()[0]
+    return cur.fetchone()[0]
+
+
+def clear_links(cur, exercise_ids: list[int] | None = None) -> None:
+    """Graph edges (always all: they are derived) and the junction rows of the
+    given exercises (None = all), which are then rebuilt from the sheet."""
+    cur.execute("DELETE FROM exercise_relation")
+    for table in ("exercise_compensation", "exercise_family_member", "exercise_joint", "exercise_muscle"):
+        if exercise_ids is None:
+            cur.execute(f"DELETE FROM {table}")
+        else:
+            cur.execute(f"DELETE FROM {table} WHERE exercise_id = ANY (%s)", (exercise_ids,))
+
+
+def prepare_replace(cur, count: int, replace: bool) -> str | None:
+    """Default and --replace modes. Returns the reason to stop, or None."""
     if count == 0:
         return None
     if not replace:
-        return f"the library already has {count} exercises; use --replace to replace it"
+        return (f"the library already has {count} exercises; use --update to apply the sheet "
+                "to it, or --replace to delete it and import again")
     cur.execute("SELECT count(*), count(DISTINCT plan_id) FROM plan_item")
     items, plans = cur.fetchone()
     if items:
         return (f"--replace refused: {items} plan items in {plans} plans reference the library; "
-                "the library cannot be replaced while plans use its exercises")
-    for table in ("exercise_relation", "exercise_compensation", "exercise_family_member",
-                  "exercise_joint", "exercise_muscle", "exercise", "exercise_family"):
-        cur.execute(f"DELETE FROM {table}")
+                "use --update instead (it keeps the exercises that plans use)")
+    clear_links(cur)
+    cur.execute("DELETE FROM exercise")
+    cur.execute("DELETE FROM exercise_family")
     return None
 
 
-def write_library(cur, exercises: list[Exercise], edges: Edges, ref: Reference) -> dict[str, int]:
-    family_ids: dict[str, int] = {}
+def check_update(cur, exercises: list[Exercise], report: Report) -> None:
+    """--update: changes the sheet may not make to exercises that plans already use."""
+    cur.execute("""SELECT DISTINCT e.name
+                     FROM plan_item pi JOIN exercise e ON e.id = pi.exercise_id
+                    WHERE pi.side <> 'both'""")
+    one_sided = {r[0] for r in cur.fetchall()}
+    for ex in exercises:
+        if ex.is_symmetric and ex.name in one_sided:
+            report.error(LIBRARY_SHEET, ex.row, "Symmetric", "yes",
+                         "the exercise is planned for one side (left/right) in existing plans, "
+                         "so it cannot become symmetric (DQ25)")
+
+
+def write_exercises(cur, exercises: list[Exercise]) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """Insert (or, with update, upsert by name) families and exercises. Returns name -> id maps and counts."""
+    counts = {"added": 0, "changed": 0, "unchanged": 0, "deleted": 0, "deactivated": 0}
+
+    cur.execute("SELECT name, id FROM exercise_family")
+    family_ids: dict[str, int] = dict(cur.fetchall())
     for ex in exercises:
         for fam in ex.families:
             if fam not in family_ids:
                 cur.execute("INSERT INTO exercise_family (name) VALUES (%s) RETURNING id", (fam,))
                 family_ids[fam] = cur.fetchone()[0]
 
+    cur.execute("SELECT name, id FROM exercise")
+    existing: dict[str, int] = dict(cur.fetchall())
     ids: dict[str, int] = {}
     for ex in exercises:
-        cur.execute(
-            """INSERT INTO exercise (name, description, mode, starting_pose, is_symmetric,
-                                     difficulty, rep_duration_sec, is_active)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-            (ex.name, ex.description, ex.mode, ex.starting_pose, ex.is_symmetric,
-             ex.difficulty, ex.rep_duration_sec, ex.is_active))
-        ids[ex.name] = cur.fetchone()[0]
+        values = (ex.description, ex.mode, ex.starting_pose, ex.is_symmetric,
+                  ex.difficulty, ex.rep_duration_sec, ex.is_active)
+        if ex.name in existing:
+            ids[ex.name] = existing[ex.name]
+            cur.execute(
+                """UPDATE exercise
+                      SET (description, mode, starting_pose, is_symmetric, difficulty, rep_duration_sec, is_active)
+                        = (%s, %s, %s, %s, %s, %s, %s)
+                    WHERE id = %s
+                      AND (description, mode, starting_pose, is_symmetric, difficulty, rep_duration_sec, is_active)
+                          IS DISTINCT FROM (%s, %s::exercise_mode, %s::starting_pose, %s, %s, %s, %s)""",
+                values + (ids[ex.name],) + values)
+            counts["changed" if cur.rowcount else "unchanged"] += 1
+        else:
+            cur.execute(
+                """INSERT INTO exercise (description, mode, starting_pose, is_symmetric,
+                                         difficulty, rep_duration_sec, is_active, name)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                values + (ex.name,))
+            ids[ex.name] = cur.fetchone()[0]
+            counts["added"] += 1
 
+    return ids, family_ids, counts
+
+
+def remove_missing(cur, ids: dict[str, int], counts: dict[str, int], report: Report) -> None:
+    """--update: exercises that are no longer in the sheet. Deleted if nothing
+    refers to them; otherwise deactivated and kept with their joints, muscles,
+    families and compensations, so old plans can still be checked (BR1–BR9)."""
+    cur.execute("""SELECT e.id, e.name, e.is_active,
+                          EXISTS (SELECT 1 FROM plan_item pi WHERE pi.exercise_id = e.id)
+                          OR EXISTS (SELECT 1 FROM recommendation r WHERE r.candidate_exercise_id = e.id)
+                     FROM exercise e
+                    WHERE NOT (e.id = ANY (%s))""", (list(ids.values()),))
+    for ex_id, name, is_active, used in cur.fetchall():
+        if used:
+            if is_active:
+                cur.execute("UPDATE exercise SET is_active = false WHERE id = %s", (ex_id,))
+                counts["deactivated"] += 1
+                report.warning(LIBRARY_SHEET, None, "Name", name,
+                               "the exercise is no longer in the sheet but plans or recommendations use it: "
+                               "deactivated (kept with its joints and muscles)")
+        else:
+            # a kept (deactivated) exercise may still list it as a compensation
+            cur.execute("DELETE FROM exercise_compensation WHERE compensation_exercise_id = %s", (ex_id,))
+            cur.execute("DELETE FROM exercise WHERE id = %s", (ex_id,))
+            counts["deleted"] += 1
+
+
+def write_links(cur, exercises: list[Exercise], ids: dict[str, int], family_ids: dict[str, int],
+                edges: Edges, ref: Reference) -> None:
     cur.executemany(
         "INSERT INTO exercise_family_member (exercise_id, family_id) VALUES (%s, %s)",
         [(ids[ex.name], family_ids[fam]) for ex in exercises for fam in ex.families])
@@ -673,10 +755,23 @@ def write_library(cur, exercises: list[Exercise], edges: Edges, ref: Reference) 
            VALUES (%s, %s, %s, %s, %s)""",
         sorted(variation_rows) + sorted(progression_rows))
 
-    return {
-        "exercises": len(exercises),
+
+def summarize(exercises: list[Exercise], family_ids: dict[str, int], edges: Edges,
+              counts: dict[str, int], update: bool) -> dict[str, int]:
+    summary = {
+        "exercises in the sheet": len(exercises),
         "  of them inactive": sum(not ex.is_active for ex in exercises),
-        "families": len(family_ids),
+    }
+    if update:
+        summary.update({
+            "  added": counts["added"],
+            "  changed": counts["changed"],
+            "  unchanged": counts["unchanged"],
+            "not in the sheet: deleted": counts["deleted"],
+            "not in the sheet: deactivated (used)": counts["deactivated"],
+        })
+    summary.update({
+        "families": len({fam for ex in exercises for fam in ex.families}),
         "family memberships": sum(len(ex.families) for ex in exercises),
         "joint links": sum(len(ex.joints) for ex in exercises),
         "muscle links": sum(len(ex.muscles) for ex in exercises),
@@ -686,7 +781,8 @@ def write_library(cur, exercises: list[Exercise], edges: Edges, ref: Reference) 
         "manual progressions": sum(edges.progressions.values()),
         "  of them replacing an automatic one": len(edges.overridden),
         "pairs in both graphs": sum(1 for (e, h) in edges.progressions if frozenset((e, h)) in edges.variations),
-    }
+    })
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -697,8 +793,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import the Kinetune exercise library from the spreadsheet (.xlsx).")
     parser.add_argument("file", type=Path, help="library workbook, e.g. db/library/kinetune_library.xlsx")
     parser.add_argument("--dry-run", action="store_true", help="validate and print the summary, write nothing")
-    parser.add_argument("--replace", action="store_true",
-                        help="replace an existing library (refused if any plan uses its exercises)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--replace", action="store_true",
+                      help="delete the library and import again (refused if any plan uses its exercises)")
+    mode.add_argument("--update", action="store_true",
+                      help="apply the sheet to the existing library by exercise name; keeps ids used by plans")
     args = parser.parse_args(argv)
 
     try:
@@ -716,6 +815,7 @@ def main(argv: list[str] | None = None) -> int:
     report = Report()
     summary: dict[str, int] | None = None
     stop_reason: str | None = None
+    edges: Edges | None = None
     try:
         with conn, conn.transaction() as tx, conn.cursor() as cur:
             cur.execute("SET LOCAL search_path TO kinetune")
@@ -724,12 +824,26 @@ def main(argv: list[str] | None = None) -> int:
             check_library_links(exercises, report)
             manual = read_progressions(wb, {ex.name for ex in exercises}, report)
             edges = derive_edges(exercises, manual, report)
+            count = lock_library(cur)
+            if args.update:
+                check_update(cur, exercises, report)
             if report.errors:
                 raise psycopg.Rollback(tx)
-            stop_reason = prepare_library(cur, args.replace)
-            if stop_reason:
-                raise psycopg.Rollback(tx)
-            summary = write_library(cur, exercises, edges, ref)
+            if not args.update:
+                stop_reason = prepare_replace(cur, count, args.replace)
+                if stop_reason:
+                    raise psycopg.Rollback(tx)
+            ids, family_ids, counts = write_exercises(cur, exercises)
+            if args.update:
+                clear_links(cur, list(ids.values()))
+                remove_missing(cur, ids, counts, report)
+            else:
+                clear_links(cur)              # leftovers of a library emptied by hand
+            write_links(cur, exercises, ids, family_ids, edges, ref)
+            # families that are no longer used by any exercise
+            cur.execute("""DELETE FROM exercise_family f
+                            WHERE NOT EXISTS (SELECT 1 FROM exercise_family_member m WHERE m.family_id = f.id)""")
+            summary = summarize(exercises, family_ids, edges, counts, args.update)
             if args.dry_run:
                 raise psycopg.Rollback(tx)
     except psycopg.Error as exc:
@@ -752,10 +866,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(report.errors) + bool(stop_reason)} error(s), {len(report.warnings)} warning(s). Nothing was written.")
         return 1
 
-    for edge in (edges.overridden if edges else []):
-        mp, (e, h) = edge
+    for mp, (e, h) in edges.overridden:
         print(f"INFO    {PROGRESSIONS_SHEET}, row {mp.row}: manual {mp.easier} -> {mp.harder} replaces automatic {e} -> {h}")
-    title = "Dry run passed (nothing written)" if args.dry_run else "Library imported"
+    action = "updated" if args.update else "imported"
+    title = f"Dry run passed, library would be {action} (nothing written)" if args.dry_run else f"Library {action}"
     print(f"{title}. {len(report.warnings)} warning(s).")
     width = max(len(k) for k in summary)
     for key, value in summary.items():

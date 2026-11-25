@@ -33,7 +33,7 @@ END $$;
 -- no application role is a superuser
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles
-                WHERE rolname IN ('kinetune_migrator','kinetune_api','kinetune_reader','app_read','app_write','app_admin')
+                WHERE rolname IN ('kinetune_migrator','kinetune_api','kinetune_reader','kinetune_admin','app_read','app_write','app_admin')
                   AND (rolsuper OR rolbypassrls OR rolreplication)) THEN
         RAISE EXCEPTION 'FAIL  an application role is a superuser / bypasses RLS / replicates';
     END IF;
@@ -231,6 +231,21 @@ SELECT pg_temp.expect_ok  ('read the concrete plan of a session',   $q$SELECT * 
 SELECT pg_temp.expect_ok  ('calculate an item duration',            $q$SELECT item_duration_sec(4, 15, false, 'both')$q$);
 SELECT pg_temp.expect_ok  ('check the plan lock',                   $q$SELECT plan_is_locked(9001)$q$);
 SELECT pg_temp.expect_fail('duplicate a plan',                      $q$SELECT duplicate_plan(9001)$q$);
+RESET ROLE;
+
+-- =========================== kinetune_admin (library import) ===========================
+DO $$ BEGIN
+    IF NOT pg_has_role('kinetune_admin', 'app_admin', 'MEMBER') THEN
+        RAISE EXCEPTION 'FAIL  kinetune_admin is not a member of app_admin'; END IF;
+    RAISE NOTICE 'PASS  kinetune_admin holds app_admin';
+END $$;
+SET ROLE kinetune_admin;
+SELECT pg_temp.expect_ok  ('lock the library for an import',        $q$LOCK TABLE exercise IN SHARE ROW EXCLUSIVE MODE$q$);
+SELECT pg_temp.expect_ok  ('insert an exercise',                    $q$INSERT INTO exercise (name, mode, starting_pose, difficulty, rep_duration_sec) VALUES ('Priv import','dynamic','supine',1,4)$q$);
+SELECT pg_temp.expect_ok  ('rebuild graph edges',                   $q$DELETE FROM exercise_relation WHERE from_exercise_id = 9001$q$);
+SELECT pg_temp.expect_ok  ('check plan usage before --replace',     $q$SELECT count(*) FROM plan_item$q$);
+SELECT pg_temp.expect_fail('DDL is not allowed',                    $q$CREATE TABLE kinetune.hack (id int)$q$);
+SELECT pg_temp.expect_fail('truncate is not allowed',               $q$TRUNCATE kinetune.exercise_relation$q$);
 RESET ROLE;
 
 -- =========================== app_admin (maintenance) ===========================

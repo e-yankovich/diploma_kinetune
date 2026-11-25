@@ -8,8 +8,7 @@
 --
 --   app_read   <- kinetune_reader   reports / analysis, read-only
 --   app_write  <- kinetune_api      the FastAPI backend
---   app_admin                       maintenance of reference data; granted to
---                                   a named person's login only when needed
+--   app_admin  <- kinetune_admin    maintenance: library import, reference data
 --
 --   app_admin  ⊃ app_write ⊃ app_read      (each includes the one below)
 --
@@ -178,6 +177,9 @@ BEGIN
     END IF;
     IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'kinetune_reader') THEN
         GRANT app_read TO kinetune_reader;
+    END IF;
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'kinetune_admin') THEN
+        GRANT app_admin TO kinetune_admin;      -- library import, reference data
     END IF;
 END
 $$;
