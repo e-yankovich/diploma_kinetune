@@ -1,6 +1,6 @@
 # Kinetune — Data Dictionary
 
-DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinetune` · DDL: `db/01_schema.sql`, `db/02_triggers.sql`, `db/06_plan_and_session_model.sql` (migration 0005)
+DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinetune` · DDL: `db/01_schema.sql`, `db/02_triggers.sql` (migration 0001) · v0.6
 
 ---
 
@@ -25,16 +25,14 @@ DBMS: PostgreSQL 18 · OLTP · normalised to 3NF · all objects in schema `kinet
 
 - The volume is small (one coach, about 50 exercises, a few hundred sessions per year at most).
 - All reporting (KPIs K1–K4) can be computed from the same tables with views, so a separate analytical layer is not justified.
-- Reference data and the exercise library are loaded from version-controlled seed files (CSV/SQL) in Git. Those files act as the "source" layer outside the database.
-
-If the library import later needs validation of raw CSV rows, a `staging` schema can be added in front of the library tables without changing the core.
+- Reference data is loaded by a migration (SQL in Git). The exercise library is loaded from the author's spreadsheet export by the library import script (`db/library/`), which validates every row before it writes anything. These files act as the "source" layer outside the database.
 
 **Subject areas** (logical grouping within the core):
 
 | Area | Tables | Written by | Sensitivity |
 |---|---|---|---|
 | Reference | `body_area`, `muscle`, `joint`, `rule` | Seed files (author) | None |
-| Exercise library | `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_relation` | Seed files (author) | None |
+| Exercise library | `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_family`, `exercise_family_member`, `exercise_compensation`, `exercise_relation` | Library import (author's spreadsheet) | None |
 | Access control | `app_user`, `role`, `permission`, `role_permission`, `user_role` | Seed files; admin UI | `app_user`: **personal data** (e-mail, password hash) |
 | Planning | `plan`, `plan_item`; views `v_plan_item`, `v_session_plan` (§7) | Coach UI | None |
 | Sessions and participant input | `session`, `checkin`, `checkin_discomfort`, `feedback` | Coach UI; participant forms (anonymous) | Check-ins: **anonymous health-related answers** (no identifiers stored) |
@@ -44,12 +42,15 @@ If the library import later needs validation of raw CSV rows, a `staging` schema
 
 | Table | Expected rows (first year) |
 |---|---|
-| `body_area` | 8–12 |
-| `muscle` | 20–30 |
-| `joint` | 10–15 |
+| `body_area` | 10 (7 in the check-in) |
+| `muscle` | 28 |
+| `joint` | 11 |
 | `rule` | 11 |
 | `exercise` | 30–50 |
 | `exercise_muscle`, `exercise_joint` | 100–200 each |
+| `exercise_family` | 10–25 |
+| `exercise_family_member` | 40–80 |
+| `exercise_compensation` | 20–60 |
 | `exercise_relation` | 50–150 |
 | `app_user` | 1–2 (the author can hold both roles in one account) |
 | `role` | 2 (3 when `client` is added) |
@@ -71,13 +72,14 @@ If the library import later needs validation of raw CSV rows, a `staging` schema
 | Type | Values | Meaning |
 |---|---|---|
 | `phase` | `warm_up`, `main`, `cool_down` | Part of the class a plan item belongs to |
-| `exercise_mode` | `dynamic`, `static`, `stato_dynamic` | How the exercise is performed. `dynamic`: continuous movement (BR2: only these in the warm-up; BR4). `static`: holding a position (BR4; BR5: static ≤ 35 % of the main part). `stato_dynamic`: a hold combined with small movements. |
-| `starting_pose` | `seated`, `standing`, `lying`, `balance` | Starting position. `balance` marks exercises that need balance (BR9: risky in the first quarter of class after low energy or poor sleep; BR11: a candidate must remove this factor). |
+| `exercise_mode` | `dynamic`, `static`, `stato_dynamic` | How the exercise is performed. `dynamic`: continuous movement (BR2: only these in the warm-up; BR4). `static`: holding a position (BR4; BR5: static ≤ 40 % of the main part). `stato_dynamic`: a hold combined with small movements; not allowed in the warm-up (BR2) and not counted as static (BR5). Order used by the graph derivation: dynamic < static < stato_dynamic (§4.2). |
+| `starting_pose` | `seated`, `standing`, `balance`, `quadruped`, `downward_dog`, `supine`, `prone`, `kneeling`, `front_split` | Starting position, as used in the library. Only `balance` has a meaning in the rules: BR9/BR10 (balance exercises are affected by low energy or poor sleep), BR11 (the cascade looks for a candidate without balance) and the graph derivation (balance makes an exercise harder). The other values are for display and filtering. |
 | `side` | `left`, `right`, `both` | Which side a plan item is performed on. `both`: both sides within one item. An asymmetric exercise can also be planned as two items, `left` and `right` (BR7). |
-| `relation_type` | `variation`, `progression` | `variation`: different execution, same difficulty. `progression`: the target exercise is harder; the reverse direction is a regression. |
-| `load_level` | `low`, `medium`, `high` | How much an exercise loads a joint (`exercise_joint.load`). BR9 reacts to `medium` and `high`; BR11 needs a candidate with a lower level on the reported joint (§4.2). |
-| `plan_status` | `draft`, `completed`, `reviewed` | `draft`: the coach is building the plan. `completed`: the coach finished building it (a target duration is required). `reviewed`: the BR1–BR8 check was run on the plan and the coach reviewed the result. Allowed transitions: draft → completed → reviewed, and back to `draft` from any status. Any change to the items or the target duration moves a `completed`/`reviewed` plan back to `draft` (**T**). Details in §4.4. |
-| `session_status` | `open`, `closed`, `reviewed`, `done` | `open`: check-in link accepts answers. `closed`: the coach closed the check-in (US3.2) and recommendations are generated. `reviewed`: the coach has decided on every recommendation and the concrete plan was checked again with BR1–BR8. `done`: the class took place and attendance has been entered. Allowed transitions: open → closed → reviewed → done. Details in §4.5. |
+| `relation_type` | `variation`, `progression` | `variation`: same level, different execution (undirected). `progression`: the target is harder by at least one attribute and easier by none, or a manual progression; the reverse direction is a regression. Criteria in §4.2 (`exercise_relation`). |
+| `load_level` | `low`, `medium`, `high` | How much an exercise loads a joint (`exercise_joint.load_level`). BR9/BR10 react to `high`; the BR11 cascade looks for no load, then a lower load; the graph derivation compares loads (§4.2). |
+| `energy_level` | `low`, `normal`, `high` | Self-rated energy in the check-in. `low` is the low-energy factor of BR9/BR10. |
+| `plan_status` | `draft`, `completed`, `reviewed` | `draft`: the coach is building the plan. `completed`: the coach finished building it (a target duration is required). `reviewed`: the BR1–BR8 check was run on the plan and the coach reviewed the result. Allowed transitions: draft → completed → reviewed, and back to `draft` from any status. Any change to the plan or its items moves it back to `draft` (**T**). Details in §4.4. |
+| `session_status` | `open`, `closed`, `reviewed`, `done` | `open`: check-in link accepts answers. `closed`: the coach closed the check-in (US3.2), entered the number of participants present, and recommendations are generated. `reviewed`: the coach has decided on every recommendation and the concrete plan was checked again with BR1–BR8. `done`: the class took place and attendance has been entered. Allowed transitions: open → closed → reviewed → done. Details in §4.5. |
 | `recommendation_form` | `alternative`, `replacement` | What the triggered rule called for: BR9 alternative (shown next to the original), BR10 replacement |
 | `explanation_source` | `template`, `llm` | Where the explanation text came from. `template` is also the fallback when the LLM fails (NFR9). |
 | `decision_type` | `accepted`, `declined` | The coach's response to a recommendation. Warnings (BR11) are decided too: `accepted` = the coach applies the general advice, `declined` = not. |
@@ -91,29 +93,30 @@ Column legend: **Null** = whether NULL is allowed · **Key**: PK, FK → table, 
 ### 4.1 Reference
 
 #### `body_area`
-An area of the body that participants can report as uncomfortable in the check-in. It consists of muscles and joints, which link discomfort to exercises.
+A body part. It consists of muscles and joints, which link check-in discomfort to exercises. Only the body parts marked `is_in_checkin` are shown in the check-in form.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | smallint | no | PK | identity | |
-| `code` | varchar(32) | no | UQ | | Stable machine code, e.g. `lower_back`, `knees`. Lower-case letters and `_` only: CHECK `code ~ '^[a-z_]+$'`. |
+| `code` | varchar(32) | no | UQ | | Stable machine code, e.g. `lower_back`, `knee`. Lower-case letters and `_` only: CHECK `code ~ '^[a-z_]+$'`. |
 | `name_en` | varchar(64) | no | | | Label on the English participant form |
 | `name_ru` | varchar(64) | no | | | Label on the Russian participant form |
+| `is_in_checkin` | boolean | no | | `false` | `true` = shown in the check-in form. Joints of body parts outside the check-in never trigger BR9/BR10. |
 
-Data quality: every area has at least one muscle or joint (**Q**, DQ10). Both labels are non-empty after trimming (**C**: CHECK `btrim(name_en) <> ''`, same for `name_ru`).
+Data quality: every area has at least one muscle or joint (**Q**, DQ10); every area in the check-in has at least one joint (**Q**, DQ34). Both labels are non-empty after trimming (**C**: CHECK `btrim(name_en) <> ''`, same for `name_ru`).
 
 #### `muscle`
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | smallint | no | PK | identity | |
-| `name` | varchar(64) | no | UQ | | English name, e.g. `hamstrings` |
+| `name` | varchar(64) | no | UQ | | English name in lower case, e.g. `hamstrings`. The library import matches muscles by this name. |
 | `body_area_id` | smallint | no | FK → `body_area` | | The area this muscle belongs to (exactly one) |
 
 #### `joint`
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | smallint | no | PK | identity | |
-| `name` | varchar(64) | no | UQ | | English name, e.g. `knee` |
+| `name` | varchar(64) | no | UQ | | English name in lower case, e.g. `knee`. The library import matches joints by this name. |
 | `body_area_id` | smallint | no | FK → `body_area` | | The area this joint belongs to (exactly one) |
 
 #### `rule`
@@ -122,8 +125,8 @@ The business rules BR1–BR11 from thesis Table 2.7. Recommendations refer to th
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
 | `id` | smallint | no | PK | (set explicitly) | 1–11, equal to the BR number. CHECK `id BETWEEN 1 AND 11`. |
-| `description` | text | no | | | The rule's logic as worded in the thesis |
-| `explanation` | text | no | | | Template explanation shown to the coach with a recommendation. Also used as the fallback when the LLM fails. |
+| `description` | text | no | | | The rule's logic (business rules v2) |
+| `explanation` | text | no | | | Template explanation shown to the coach with a recommendation, with placeholders the backend fills (e.g. `{exercise}`, `{body_area}`, `{share}`). Also used as the fallback when the LLM fails. |
 
 Data quality: exactly 11 rows, ids 1–11 (**Q**, DQ14).
 
@@ -136,15 +139,14 @@ Data quality: exactly 11 rows, ids 1–11 (**Q**, DQ14).
 | `name` | varchar(120) | no | UQ | | English name shown in the coach UI |
 | `description` | text | yes | | | Execution notes |
 | `mode` | exercise_mode | no | | | Dynamic, static or stato-dynamic (BR2, BR4, BR5) |
-| `starting_pose` | starting_pose | no | | | Seated, standing, lying or balance (BR9, BR11) |
-| `is_symmetric` | boolean | no | | `true` | `false` = asymmetric: performed on each side separately, and both sides must be done in the same phase (BR7) |
-| `required_compensation_id` | integer | yes | FK → `exercise` | | The exercise that must follow this one before the end of class (BR6), e.g. a back extension after a deep forward fold. NULL = no compensation needed. CHECK `required_compensation_id <> id`. Must be an active exercise (**Q**, DQ27). |
+| `starting_pose` | starting_pose | no | | | One of the nine library poses (§3); only `balance` is used by the rules |
+| `is_symmetric` | boolean | no | | `true` | `true` when both sides do the same movement at the same time, and for exercises whose name says "Alternating" or "Side-to-Side" (one item covers both sides). `false` = asymmetric: performed on one side and then the other, and both sides must be done in the same phase (BR7). |
 | `difficulty` | smallint | no | | | 1 = easy, 2 = medium, 3 = hard. CHECK `difficulty BETWEEN 1 AND 3`. |
-| `rep_duration_sec` | integer | no | | | Seconds for **one** repetition. For a static exercise one repetition = one hold. CHECK `> 0`. Item durations are calculated from it (§7). |
+| `rep_duration_sec` | smallint | no | | | Whole seconds for **one** repetition (library values: 2, 4, 15). For a static exercise one repetition = one hold. CHECK `> 0`. Item durations are calculated from it (§7). |
 | `is_active` | boolean | no | | `true` | Soft delete. Inactive exercises stay in old plans and recommendations but cannot be added to new plans or offered as candidates. |
 | `created_at` | timestamptz | no | | `now()` | |
 
-Data quality: every active exercise has at least one primary muscle or primary joint (**Q**, DQ09) and, as a warning, at least one primary joint (**Q**, DQ28). New plan items and candidates use active exercises only (**A**, DQ16). Compensation links contain no two-exercise loop, i.e. A requires B and B requires A (**Q**, DQ26).
+Data quality: every active exercise has at least one main joint or main muscle (**Q**, DQ09); relaxation exercises have main joints with a `low` load and no muscles, which is valid. As a warning, every active exercise has at least one main joint (**Q**, DQ28). New plan items and candidates use active exercises only (**A**, DQ16). The name is unique and is the reference key of the library sheet (compensations, manual progressions).
 
 #### `exercise_muscle`
 Which muscles an exercise works (M:N).
@@ -153,7 +155,7 @@ Which muscles an exercise works (M:N).
 |---|---|---|---|---|---|
 | `exercise_id` | integer | no | PK, FK → `exercise` | | |
 | `muscle_id` | smallint | no | PK, FK → `muscle` | | |
-| `is_primary` | boolean | no | | `false` | `true` = main target of the exercise; `false` = secondary |
+| `is_primary` | boolean | no | | `false` | `true` = main muscle = the muscle that is **stretched** (the target of the exercise), not the one that does the work; `false` = secondary. BR11 requires a candidate to share at least one main muscle. |
 
 #### `exercise_joint`
 Which joints an exercise involves (M:N), and how much it loads each of them.
@@ -163,18 +165,50 @@ Which joints an exercise involves (M:N), and how much it loads each of them.
 | `exercise_id` | integer | no | PK, FK → `exercise` | | |
 | `joint_id` | smallint | no | PK, FK → `joint` | | |
 | `is_primary` | boolean | no | | `false` | `true` = a main joint of the exercise, i.e. what the exercise is "about". Used for sorting, filtering and display in the library. Not used by the rules. |
-| `load` | load_level | no | | | How much the exercise loads this joint: `low`, `medium` or `high`. Used by BR9 and BR11 (below). |
+| `load_level` | load_level | no | | | How much the exercise loads this joint: `low`, `medium` or `high`. Filled for every listed joint, main or secondary; a joint that is not listed is not involved. |
 
-`is_primary` and `load` are independent. Example: a deep lunge has the hip as its primary joint, but it also puts a high load on the knee. Its knee row is `is_primary = false`, `load = 'high'`.
+`is_primary` and `load_level` are independent. Example: a deep lunge has the hip as its main joint, but it also puts a high load on the knee. Its knee row is `is_primary = false`, `load_level = 'high'`.
 
-How the rules use `load`:
-- **BR9 / BR10** ("a joint that the exercise loads at a medium or high level"): an exercise needs attention when participants report discomfort in a body area and the exercise has `load` = `medium` or `high` on a joint of that area.
-- **BR11** ("a lower load on the reported joint"): a candidate qualifies if its `load` on that joint is lower than the original exercise's load, or if the candidate does not involve that joint at all (no row).
+How the rules use `load_level` (main and secondary joints alike):
+- **BR9 / BR10**: an exercise needs attention when participants report discomfort in a body part and the exercise has `load_level = 'high'` on a joint of that body part.
+- **BR11 cascade**: first a candidate with no load on the joint(s) of that body part (no row), then one with a lower load, then any regression.
+- **Graph derivation**: a higher load on some joint makes an exercise harder (below).
 
 Both values are assigned by the coach when compiling the library. They are expert estimates, the same approach as `exercise.difficulty` (1–3).
 
+#### `exercise_family`
+A movement family: exercises that can stand in for each other, e.g. "ankle mobility" = ankle circles and ankle flexion/extension, seated and standing. Entered by the coach in the library sheet (columns "Family 1–3"); created by the library import.
+
+| Column | Type | Null | Key | Default | Description and rules |
+|---|---|---|---|---|---|
+| `id` | smallint | no | PK | identity | |
+| `name` | varchar(64) | no | UQ | | CHECK `btrim(name) <> ''`. A reference table, so a typo cannot create a second family. |
+
+Data quality: a family has at least 2 exercises (**Q**, DQ35, warning). Members should share at least one main muscle (BR11).
+
+#### `exercise_family_member`
+Which families an exercise belongs to (M:N). An exercise may belong to up to three families (a limit of the sheet, not of the database).
+
+| Column | Type | Null | Key | Default | Description and rules |
+|---|---|---|---|---|---|
+| `exercise_id` | integer | no | PK, FK → `exercise` | | |
+| `family_id` | smallint | no | PK, FK → `exercise_family` | | |
+
+Index: (`family_id`), for "members of family X" in the candidate search.
+
+#### `exercise_compensation`
+The acceptable compensating exercises of an exercise (BR6, M:N). **BR6 is satisfied if any one of the listed exercises follows** the exercise before the end of class; if none does, the warning lists them as options. An exercise without rows needs no compensation. Compensation is set only where it is really needed (all difficulty-3 exercises and static difficulty-2 exercises, with exceptions decided by the author), because every listed exercise always carries the requirement.
+
+| Column | Type | Null | Key | Default | Description and rules |
+|---|---|---|---|---|---|
+| `exercise_id` | integer | no | PK, FK → `exercise` | | The exercise that needs compensation |
+| `compensation_exercise_id` | integer | no | PK, FK → `exercise` | | One acceptable compensating exercise. CHECK `exercise_id <> compensation_exercise_id`. |
+
+Index: (`compensation_exercise_id`), for "which exercises does X compensate" and the RESTRICT check on delete.
+Data quality: no two-exercise loop, i.e. A compensated by B and B compensated by A (**Q**, DQ26); a compensating exercise is active (**Q**, DQ27). In the sheet: columns "Compensation exercise 1–4" (exercise names); the import writes one row per filled cell.
+
 #### `exercise_relation`
-Edges of the exercise graph, used to find substitute candidates (`WITH RECURSIVE`, depth ≤ 2).
+Edges of the two exercise graphs, used to find substitute candidates (`WITH RECURSIVE`, depth ≤ 2). The **variation graph** (undirected) answers "same level, different execution" and is tried first; the **progression graph** (directed, easier → harder) is a ladder of difficulty and is followed only backwards (to regressions) for a participant with discomfort. Both are one edge table with a type and a direction.
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
@@ -183,12 +217,22 @@ Edges of the exercise graph, used to find substitute candidates (`WITH RECURSIVE
 | `to_exercise_id` | integer | no | FK → `exercise` | | Target exercise. CHECK `from_exercise_id <> to_exercise_id` (no self-loops). |
 | `type` | relation_type | no | | | Variation or progression |
 | `is_directed` | boolean | no | | `true` | `true`: the edge is followed only from → to. `false`: it is followed both ways. Undirected edges are stored once: CHECK `is_directed OR from_exercise_id < to_exercise_id`. |
+| `is_manual` | boolean | no | | `false` | `false` = derived by the library import from families and attributes; `true` = a manual progression from the sheet "Progressions (manual)". Needed for the "no bridges" rule of BR11. |
 
-Keys and indexes: UQ (`from_exercise_id`, `to_exercise_id`, `type`). Index (`from_exercise_id`, `type`) for the forward search; index (`to_exercise_id`) for the backward search over undirected edges.
+**How the edges are derived** (business rules v2, "Exercise graphs"). Exercise B is **harder than A by an attribute** if: B's `difficulty` is higher; or B's `mode` is later in the order dynamic < static < stato_dynamic; or B's `starting_pose` is `balance` and A's is not; or B has a higher `load_level` on some joint than A (a joint A does not involve counts as no load). For every pair (A, B) that shares at least one family:
+- B is harder than A by at least one attribute and easier by none → **progression** A → B (`is_directed = true`, `is_manual = false`);
+- otherwise (no difference, or harder by one attribute and easier by another) → **variation** (`is_directed = false`, stored once with the smaller id first, `is_manual = false`).
+
+"Harder" is a strict comparison, so derived progressions never form a cycle. **Manual progressions** (`is_manual = true`) cover what the attributes cannot detect (expert judgement, links between families); a manual progression overrides the derived edge for that pair, so a pair is never both a variation and a progression (DQ36).
+
+**No bridges.** A candidate must share at least one family with the original exercise, or be linked to it by manual progressions (directly or through a chain of them). An exercise in two families therefore never connects two families that the coach did not link.
+
+Keys and indexes: unique index `uq_exercise_relation_pair` on (`LEAST(from_exercise_id, to_exercise_id)`, `GREATEST(from_exercise_id, to_exercise_id)`): one edge per pair of exercises, whatever the type and direction (DQ36). Index (`from_exercise_id`, `type`) for the forward search; index (`to_exercise_id`) for the backward search over undirected edges.
 
 Data quality:
 - Progression edges form no cycle: an exercise cannot be harder than itself through a chain (**Q**, DQ12).
 - For a progression edge, the target's difficulty is greater than or equal to the source's (**Q**, DQ17).
+- A pair of exercises has at most one edge: never both a variation and a progression, and never A → B together with B → A (**C**, unique index, DQ36).
 - A variation is expected to be undirected; a directed variation is reported for review (**Q**, warning only).
 
 ### 4.3 Access control
@@ -280,7 +324,7 @@ The **blueprint** of a class, built by the coach. It is checked with BR1–BR8 (
 | `coach_id` | integer | no | FK → `app_user` | | Owner. The user must hold the `coach` role (**T**, DQ21). |
 | `title` | varchar(120) | no | | | CHECK `btrim(title) <> ''` |
 | `notes` | text | yes | | | |
-| `target_duration_min` | smallint | yes | | | Planned length of the class in minutes. BR8 compares it with the calculated plan duration (±5 min). CHECK `BETWEEN 15 AND 120`. May be NULL only while the plan is a draft: CHECK `status = 'draft' OR target_duration_min IS NOT NULL` (DQ29). |
+| `target_duration_min` | smallint | yes | | | Planned length of the class in minutes. BR8 compares it with the calculated plan duration (±5 min); BR8 is skipped while it is empty. CHECK `target_duration_min > 0`. May be NULL only while the plan is a draft: CHECK `status = 'draft' OR target_duration_min IS NOT NULL` (DQ29). |
 | `status` | plan_status | no | | `draft` | See below (**T**, DQ29) |
 | `created_at` | timestamptz | no | | `now()` | |
 | `updated_at` | timestamptz | no | | `now()` | Updated by a trigger on every change to the plan or its items (**T**) |
@@ -290,10 +334,10 @@ The **blueprint** of a class, built by the coach. It is checked with BR1–BR8 (
 - `draft` → `completed`: the coach has finished building the plan. A target duration is required.
 - `completed` → `reviewed`: the BR1–BR8 check was run on the blueprint and the coach reviewed its result. The rules are warnings and the coach decides (thesis 2.5), so the database does not enforce the rules themselves. It only enforces the order of the statuses.
 - Any status → `draft`: the coach reopens the plan.
-- Any change to the plan's items (insert, update, delete) or to `target_duration_min` moves a `completed` or `reviewed` plan back to `draft`, because the check has to be run again (**T**). Title and notes do not affect the check and do not change the status.
+- **Any change** to the plan's items (insert, update, delete) or to a plan field (title, notes, target duration, owner) moves a `completed` or `reviewed` plan back to `draft`, because the check has to be run again (**T**). If one statement changes a field and the status together, the field change wins and the plan becomes `draft`.
 - A session can be created only from a `reviewed` plan (**T**, DQ30).
 
-**Lock.** As soon as any session uses a plan (in any session status), the plan is **locked** (**T**, DQ31): its items, `target_duration_min` and `status` can no longer change. The plan of a past or running class therefore never changes afterwards. To change a locked plan, the coach duplicates it with `duplicate_plan()` (§7) and edits the copy, which starts as a new `draft`. `plan_is_locked(plan_id)` tells the UI whether a plan is locked. A locked plan is always `reviewed`, because sessions are created only from reviewed plans.
+**Lock.** As soon as any session uses a plan (in any session status), the plan is **locked** (**T**, DQ31): its items and all its fields (title, notes, target duration, status) can no longer change; only the technical `updated_at` is maintained. The plan of a past or running class therefore never changes afterwards. To change a locked plan, the coach duplicates it with `duplicate_plan()` (§7) and edits the copy, which starts as a new `draft`. `plan_is_locked(plan_id)` tells the UI whether a plan is locked. A locked plan is always `reviewed`, because sessions are created only from reviewed plans.
 
 #### `plan_item`
 One exercise in a plan, at a given position within a phase.
@@ -306,7 +350,7 @@ One exercise in a plan, at a given position within a phase.
 | `phase` | phase | no | | | |
 | `position` | smallint | no | | | Order within the phase, starting at 1. CHECK `position >= 1`. |
 | `side` | side | no | | `both` | Left, right or both. For a symmetric exercise it must be `both` (**T**, DQ25). |
-| `reps_count` | smallint | no | | `1` | Number of repetitions (per side if `side` is `left` or `right`). For a static exercise: number of holds. CHECK `reps_count > 0`. |
+| `reps_count` | smallint | no | | | Number of repetitions: **per side** for an asymmetric exercise, **total** for a symmetric one (including "Alternating" / "Side-to-Side" exercises). For a static exercise: number of holds. No default: the coach enters it. CHECK `reps_count > 0`. |
 
 The duration of an item is **calculated, not stored** (3NF): `reps_count × exercise.rep_duration_sec`, doubled when the exercise is asymmetric (`is_symmetric = false`) and `side = 'both'` (both sides in one item). The formula exists once, in `item_duration_sec()` (§7). The plan duration for BR8 is the sum over `v_plan_item`.
 
@@ -326,12 +370,12 @@ One class. A session is the **concrete plan** of that class: the blueprint (`pla
 | `group_name` | varchar(80) | no | | | Free label, e.g. "Tuesday evening". CHECK `btrim(group_name) <> ''`. |
 | `starts_at` | timestamptz | no | | | Planned start of the class |
 | `status` | session_status | no | | `open` | A new session starts as `open`; only forward transitions open → closed → reviewed → done (**T**, DQ04). See below. |
-| `checkin_token` | varchar(43) | no | UQ | | Random 32-byte value, base64url-encoded, used in the check-in link and QR code. Not guessable and not derived from the id. CHECK `checkin_token ~ '^[A-Za-z0-9_-]{43}$'`. |
+| `checkin_token` | varchar(43) | no | UQ | | Random 32-byte value, base64url-encoded. It is the check-in link (`<site>/checkin/<token>`); the QR code is drawn from the link by the frontend, so neither is stored. Not guessable and not derived from the id. CHECK `checkin_token ~ '^[A-Za-z0-9_-]{43}$'`. |
 | `checkin_closed_at` | timestamptz | yes | | | Set when the coach closes the check-in. CHECK `(status = 'open') = (checkin_closed_at IS NULL)` (DQ04). |
-| `participants_present` | smallint | yes | | | Entered by the coach after class; the base for K2 and K4. CHECK `>= 0`. Required once `status = 'done'`: CHECK `status <> 'done' OR participants_present IS NOT NULL` (DQ05). |
+| `participants_present` | smallint | yes | | | Entered by the coach when closing the check-in (participants present at that moment); the base for the BR9/BR10 shares, K2 and K4. CHECK `>= 0`. Required from `closed` on: CHECK `status = 'open' OR participants_present IS NOT NULL` (DQ05). It can be corrected later. |
 | `created_at` | timestamptz | no | | `now()` | |
 
-Index: (`starts_at`) for the session list and per-period KPIs.
+Indexes: (`starts_at`) for the session list and per-period KPIs; (`plan_id`) for the plan lock check.
 
 **Session status `reviewed`.** The coach moves a session from `closed` to `reviewed` when they have decided on **every** recommendation of the session (warnings are decided too, see `decision_type`) and the concrete plan has been checked again with BR1–BR8. A trigger rejects `reviewed` while any recommendation has no decision (**T**, DQ32); a session with no recommendations can be marked `reviewed` right away. This status is **not stored derived data**: it records a step the coach took (the session review), and the trigger only checks that the step is allowed. Whether the BR1–BR8 re-check was run is checked by the backend, which sets the status only after running it.
 
@@ -342,7 +386,7 @@ One anonymous pre-class answer. There is no link to a person, IP address or devi
 |---|---|---|---|---|---|
 | `id` | integer | no | PK | identity | |
 | `session_id` | integer | no | FK → `session` | | Accepted only while the session is `open` (**T**, DQ03) |
-| `energy` | smallint | no | | | Self-rated energy, 1 = very low … 5 = very high. CHECK `BETWEEN 1 AND 5`. **"Low energy" in BR9 = `energy <= 2`** (see the note below). |
+| `energy` | energy_level | no | | | Self-rated energy: `low`, `normal` or `high` (as in the thesis). **"Low energy" in BR9/BR10 = `energy = 'low'`.** |
 | `poor_sleep` | boolean | no | | | `true` = slept badly last night. The participant form defaults it to `false` (the thesis treats the question as optional; not answered = no poor sleep). |
 | `language` | char(2) | no | | | Form language. CHECK `IN ('en', 'ru')`. |
 | `submitted_at` | timestamptz | no | | `now()` | |
@@ -350,10 +394,9 @@ One anonymous pre-class answer. There is no link to a person, IP address or devi
 Index: (`session_id`) for the per-session aggregates.
 Data quality: the number of check-ins may be higher than `participants_present` (someone checked in but did not come). This is allowed but reported by a check query, because it pushes K2 above 100 % (**Q**, DQ15).
 
-**Low-energy threshold (single source).** The thesis describes energy as low / normal / high; the form uses a 1–5 scale. For BR9, **low energy = `energy <= 2`**. This page is the only place where the threshold is defined. The backend must use one named constant for it (e.g. `LOW_ENERGY_MAX = 2`), never the number `2` written in the rule code.
 
 #### `checkin_discomfort`
-The body areas a participant marked as uncomfortable (0..n per check-in).
+The body areas a participant marked as uncomfortable (0..n per check-in). Only body areas with `is_in_checkin = true` are offered by the form (**A**).
 
 | Column | Type | Null | Key | Default | Description and rules |
 |---|---|---|---|---|---|
@@ -415,8 +458,9 @@ The rule: deleting a session removes everything collected for it (supports data 
 | Child.column | Parent | ON DELETE | Reason |
 |---|---|---|---|
 | `muscle.body_area_id`, `joint.body_area_id` | `body_area` | RESTRICT | Reference data in use |
-| `exercise.required_compensation_id` | `exercise` | RESTRICT | Self-reference; exercises are deactivated, not deleted |
-| `exercise_muscle.exercise_id`, `exercise_joint.exercise_id` | `exercise` | CASCADE | Junction rows belong to the exercise |
+| `exercise_muscle.exercise_id`, `exercise_joint.exercise_id`, `exercise_family_member.exercise_id`, `exercise_compensation.exercise_id` | `exercise` | CASCADE | Junction rows belong to the exercise |
+| `exercise_compensation.compensation_exercise_id` | `exercise` | RESTRICT | An exercise listed as a compensation cannot be deleted; deactivate it instead |
+| `exercise_family_member.family_id` | `exercise_family` | RESTRICT | A family with members cannot be deleted |
 | `exercise_muscle.muscle_id` | `muscle` | RESTRICT | Reference data in use |
 | `exercise_joint.joint_id` | `joint` | RESTRICT | Reference data in use |
 | `exercise_relation.from_/to_exercise_id` | `exercise` | CASCADE | An edge is meaningless without both ends |
@@ -449,11 +493,11 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ02 | Validity | A candidate differs from the exercise it replaces | T | error |
 | DQ03 | Timeliness | Check-ins (and their discomfort rows) are accepted only while the session is `open` | T | error |
 | DQ04 | Consistency | `checkin_closed_at` is set exactly when the status is not `open` (C); a new session starts `open` and the status moves only open → closed → reviewed → done (T) | C + T | error |
-| DQ05 | Completeness | `participants_present` is filled once the session is `done` | C | error |
+| DQ05 | Completeness | `participants_present` is filled from `closed` on (entered when the check-in is closed) | C | error |
 | DQ06 | Timeliness | Recommendations are created only after the check-in is closed | A | error |
 | DQ07 | Consistency | A decision is not earlier than its recommendation | T | error |
 | DQ08 | Consistency | A session's coach is the owner of its plan | T | error |
-| DQ09 | Completeness | Every active exercise has at least one primary muscle or primary joint | Q | error (library import fails) |
+| DQ09 | Completeness | Every active exercise has at least one main joint or main muscle | Q | error (library import fails) |
 | DQ10 | Completeness | Every body area has at least one muscle or joint | Q | error (seed fails) |
 | DQ11 | Completeness | Every active exercise used in plans has at least one relation edge, so a substitute can be searched for | Q | warning |
 | DQ12 | Validity | Progression edges contain no cycles | Q | error |
@@ -470,14 +514,17 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ23 | Consistency | `user_role.granted_by` (if set) refers to a user holding the `admin` role | T | error |
 | DQ24 | Completeness | Every role has at least one permission; the seed matrix above matches the database | Q | error (seed fails) |
 | DQ25 | Consistency | A plan item of a symmetric exercise has `side = 'both'` | T | error |
-| DQ26 | Validity | Compensation links have no two-exercise loop (A requires B and B requires A) | Q | error (library import fails) |
-| DQ27 | Validity | A required compensation exercise is active | Q | error (library import fails) |
+| DQ26 | Validity | `exercise_compensation` has no two-exercise loop (A compensated by B and B by A) | Q | error (library import fails) |
+| DQ27 | Validity | Every compensating exercise in `exercise_compensation` is active | Q | error (library import fails) |
 | DQ28 | Completeness | Every active exercise has at least one primary joint | Q | warning |
-| DQ29 | Consistency | A new plan starts as `draft`; plan status moves draft → completed → reviewed (or back to `draft`); a plan that is not a draft has `target_duration_min`; a change to items or target moves it back to `draft` | C + T | error |
+| DQ29 | Consistency | A new plan starts as `draft`; plan status moves draft → completed → reviewed (or back to `draft`); a plan that is not a draft has `target_duration_min`; any change to the plan or its items moves it back to `draft` | C + T | error |
 | DQ30 | Consistency | A session is created only from a `reviewed` plan (T); a plan used by a session is `reviewed` (Q) | T + Q | error |
-| DQ31 | Immutability | A plan used by any session is locked: its items, target duration and status do not change | T | error |
-| DQ32 | Completeness | A session becomes `reviewed` only when every recommendation has a decision (T); sessions reviewed or done before migration 0005 with undecided recommendations are reported (Q) | T + Q | error (T) / warning (Q) |
+| DQ31 | Immutability | A plan used by any session is locked: its items and fields do not change | T | error |
+| DQ32 | Completeness | A session becomes `reviewed` only when every recommendation has a decision | T | error |
 | DQ33 | Consistency | At most one accepted replacement per plan item and session | T | error |
+| DQ34 | Completeness | Every body area shown in the check-in (`is_in_checkin`) has at least one joint | Q | error (seed fails) |
+| DQ35 | Completeness | Every exercise family has at least 2 exercises | Q | warning |
+| DQ36 | Consistency | A pair of exercises has at most one edge: never both a variation and a progression, never A → B together with B → A | C (unique index) | error |
 
 Check queries (Q) are kept in Git next to the migrations and run (a) in the automated tests, (b) after every library import, and (c) before the pilot.
 
@@ -491,7 +538,7 @@ Derived values are calculated when they are read, not stored (3NF). Each formula
 |---|---|---|---|
 | `item_duration_sec(reps_count, rep_duration_sec, is_symmetric, side)` | function, IMMUTABLE | Item duration in seconds: `reps_count × rep_duration_sec`, × 2 if `is_symmetric = false` and `side = 'both'` | The only implementation of the duration formula; used by both views |
 | `v_plan_item` | view | Items of a **blueprint**: `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `exercise_id`, `side`, `reps_count`, `duration_sec` | Plan check BR1–BR8 on the blueprint (plan review); plan duration for BR8 = `sum(duration_sec)` |
-| `v_session_plan` | view | Items of the **concrete plan of a session**: `session_id`, `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `original_exercise_id`, `exercise_id` (effective, after accepted replacements), `replacement_recommendation_id`, `alternative_exercise_ids` (accepted alternatives, shown next to the original), `side`, `reps_count`, `duration_sec` (of the effective exercise) | Session view (US5.2); BR1–BR8 check on the concrete plan (session review) |
+| `v_session_plan` | view | Items of the **concrete plan of a session**: `session_id`, `plan_id`, `plan_item_id`, `seq`, `phase`, `position`, `exercise_id` (effective, after accepted replacements), `original_exercise_id`, `is_replaced`, `replacement_recommendation_id`, `alternative_exercise_ids` (accepted alternatives, shown next to the original), `side`, `reps_count`, `duration_sec` (of the effective exercise) | Session view (US5.2); BR1–BR8 check on the concrete plan (session review) |
 | `plan_is_locked(plan_id)` | function | `true` when any session uses the plan | Lock trigger (DQ31); the UI shows a locked plan as read-only and offers "duplicate" |
 | `duplicate_plan(plan_id, title = NULL)` | function | Id of a new `draft` plan with the same coach, notes, target duration and items. Default title: `<title> (copy)`. Raises `P0002` if the plan does not exist. | Changing a locked plan (T9). Runs with the caller's rights; the API checks that the caller owns the plan. |
 
@@ -500,7 +547,7 @@ Derived values are calculated when they are read, not stored (3NF). Each formula
 - accepted **alternatives** (BR9) are listed next to the original; the item keeps its exercise;
 - **warnings** (BR11) and declined recommendations change nothing.
 
-`seq` is the position of the item in the whole class (1..n over phase, then position). BR6 ("more than five exercises later") and BR9 ("the first quarter of the class") use it.
+`seq` is the position of the item in the whole class (1..n over phase, then position). BR6 ("more than five exercises later") uses it.
 
 **One plan check for both lists (note for the backend).** The BR1–BR8 check is written once, as a function over a **list of items** (exercise, phase, position, side, duration). The backend runs the same function on `v_plan_item` (blueprint, plan review) and on `v_session_plan` with `exercise_id` (concrete plan, session review). It never reads durations from anywhere else.
 

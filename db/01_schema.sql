@@ -1,7 +1,7 @@
 -- =====================================================================
 -- Kinetune — database structure (DDL)
 -- File 1 of 2: types, tables, constraints, indexes, comments
--- Matches kinetune_schema.dbml v0.5 and data_dictionary.md v0.5
+-- Matches kinetune_schema.dbml v0.6 and data_dictionary.md v0.6
 -- Target: PostgreSQL 18 (also runs on 16+)
 -- Normally applied by Alembic migration 0001 (one transaction).
 -- Manual run as the migrator role:  psql -v ON_ERROR_STOP=1 --single-transaction -f 01_schema.sql
@@ -17,10 +17,14 @@ SET search_path TO kinetune;
 
 CREATE TYPE phase               AS ENUM ('warm_up', 'main', 'cool_down');
 CREATE TYPE exercise_mode       AS ENUM ('dynamic', 'static', 'stato_dynamic');
-CREATE TYPE starting_pose       AS ENUM ('seated', 'standing', 'lying', 'balance');
+CREATE TYPE starting_pose       AS ENUM ('seated', 'standing', 'balance', 'quadruped', 'downward_dog',
+                                         'supine', 'prone', 'kneeling', 'front_split');
 CREATE TYPE side                AS ENUM ('left', 'right', 'both');
 CREATE TYPE relation_type       AS ENUM ('variation', 'progression');
-CREATE TYPE session_status      AS ENUM ('open', 'closed', 'done');
+CREATE TYPE load_level          AS ENUM ('low', 'medium', 'high');
+CREATE TYPE energy_level        AS ENUM ('low', 'normal', 'high');
+CREATE TYPE plan_status         AS ENUM ('draft', 'completed', 'reviewed');
+CREATE TYPE session_status      AS ENUM ('open', 'closed', 'reviewed', 'done');
 CREATE TYPE recommendation_form AS ENUM ('alternative', 'replacement');
 CREATE TYPE explanation_source  AS ENUM ('template', 'llm');
 CREATE TYPE decision_type       AS ENUM ('accepted', 'declined');
@@ -91,10 +95,11 @@ CREATE TABLE user_role (
 -- ---------------------------------------------------------------------
 
 CREATE TABLE body_area (
-    id       smallint    GENERATED ALWAYS AS IDENTITY,
-    code     varchar(32) NOT NULL,
-    name_en  varchar(64) NOT NULL,
-    name_ru  varchar(64) NOT NULL,
+    id             smallint    GENERATED ALWAYS AS IDENTITY,
+    code           varchar(32) NOT NULL,
+    name_en        varchar(64) NOT NULL,
+    name_ru        varchar(64) NOT NULL,
+    is_in_checkin  boolean     NOT NULL DEFAULT false,
     CONSTRAINT pk_body_area PRIMARY KEY (id),
     CONSTRAINT uq_body_area_code UNIQUE (code),
     CONSTRAINT ck_body_area_code CHECK (code ~ '^[a-z_]+$'),
@@ -135,24 +140,20 @@ CREATE TABLE rule (
 -- ---------------------------------------------------------------------
 
 CREATE TABLE exercise (
-    id                        integer       GENERATED ALWAYS AS IDENTITY,
-    name                      varchar(120)  NOT NULL,
-    description               text,
-    mode                      exercise_mode NOT NULL,
-    starting_pose             starting_pose NOT NULL,
-    is_symmetric              boolean       NOT NULL DEFAULT true,
-    required_compensation_id  integer,
-    difficulty                smallint      NOT NULL,
-    default_duration_sec      integer       NOT NULL,
-    is_active                 boolean       NOT NULL DEFAULT true,
-    created_at                timestamptz   NOT NULL DEFAULT now(),
+    id                integer       GENERATED ALWAYS AS IDENTITY,
+    name              varchar(120)  NOT NULL,
+    description       text,
+    mode              exercise_mode NOT NULL,
+    starting_pose     starting_pose NOT NULL,
+    is_symmetric      boolean       NOT NULL DEFAULT true,
+    difficulty        smallint      NOT NULL,
+    rep_duration_sec  smallint      NOT NULL,
+    is_active         boolean       NOT NULL DEFAULT true,
+    created_at        timestamptz   NOT NULL DEFAULT now(),
     CONSTRAINT pk_exercise PRIMARY KEY (id),
     CONSTRAINT uq_exercise_name UNIQUE (name),
     CONSTRAINT ck_exercise_difficulty CHECK (difficulty BETWEEN 1 AND 3),
-    CONSTRAINT ck_exercise_duration CHECK (default_duration_sec > 0),
-    CONSTRAINT ck_exercise_compensation_not_self CHECK (required_compensation_id <> id),
-    CONSTRAINT fk_exercise_required_compensation
-        FOREIGN KEY (required_compensation_id) REFERENCES exercise (id) ON DELETE RESTRICT
+    CONSTRAINT ck_exercise_rep_duration CHECK (rep_duration_sec > 0)
 );
 
 CREATE TABLE exercise_muscle (
@@ -167,14 +168,46 @@ CREATE TABLE exercise_muscle (
 );
 
 CREATE TABLE exercise_joint (
-    exercise_id  integer  NOT NULL,
-    joint_id     smallint NOT NULL,
-    is_primary   boolean  NOT NULL DEFAULT false,
+    exercise_id  integer    NOT NULL,
+    joint_id     smallint   NOT NULL,
+    is_primary   boolean    NOT NULL DEFAULT false,
+    load_level   load_level NOT NULL,
     CONSTRAINT pk_exercise_joint PRIMARY KEY (exercise_id, joint_id),
     CONSTRAINT fk_exercise_joint_exercise
         FOREIGN KEY (exercise_id) REFERENCES exercise (id) ON DELETE CASCADE,
     CONSTRAINT fk_exercise_joint_joint
         FOREIGN KEY (joint_id) REFERENCES joint (id) ON DELETE RESTRICT
+);
+
+CREATE TABLE exercise_family (
+    id    smallint    GENERATED ALWAYS AS IDENTITY,
+    name  varchar(64) NOT NULL,
+    CONSTRAINT pk_exercise_family PRIMARY KEY (id),
+    CONSTRAINT uq_exercise_family_name UNIQUE (name),
+    CONSTRAINT ck_exercise_family_name CHECK (btrim(name) <> '')
+);
+
+CREATE TABLE exercise_family_member (
+    exercise_id  integer  NOT NULL,
+    family_id    smallint NOT NULL,
+    CONSTRAINT pk_exercise_family_member PRIMARY KEY (exercise_id, family_id),
+    CONSTRAINT fk_exercise_family_member_exercise
+        FOREIGN KEY (exercise_id) REFERENCES exercise (id) ON DELETE CASCADE,
+    CONSTRAINT fk_exercise_family_member_family
+        FOREIGN KEY (family_id) REFERENCES exercise_family (id) ON DELETE RESTRICT
+);
+
+-- BR6: an exercise may have several acceptable compensating exercises;
+-- the rule is satisfied if any one of them follows it in the plan
+CREATE TABLE exercise_compensation (
+    exercise_id               integer NOT NULL,
+    compensation_exercise_id  integer NOT NULL,
+    CONSTRAINT pk_exercise_compensation PRIMARY KEY (exercise_id, compensation_exercise_id),
+    CONSTRAINT ck_exercise_compensation_not_self CHECK (exercise_id <> compensation_exercise_id),
+    CONSTRAINT fk_exercise_compensation_exercise
+        FOREIGN KEY (exercise_id) REFERENCES exercise (id) ON DELETE CASCADE,
+    CONSTRAINT fk_exercise_compensation_compensation
+        FOREIGN KEY (compensation_exercise_id) REFERENCES exercise (id) ON DELETE RESTRICT
 );
 
 CREATE TABLE exercise_relation (
@@ -183,8 +216,8 @@ CREATE TABLE exercise_relation (
     to_exercise_id    integer       NOT NULL,
     type              relation_type NOT NULL,
     is_directed       boolean       NOT NULL DEFAULT true,
+    is_manual         boolean       NOT NULL DEFAULT false,
     CONSTRAINT pk_exercise_relation PRIMARY KEY (id),
-    CONSTRAINT uq_exercise_relation UNIQUE (from_exercise_id, to_exercise_id, type),
     CONSTRAINT ck_exercise_relation_not_self CHECK (from_exercise_id <> to_exercise_id),
     -- an undirected edge is stored once, with the smaller id first
     CONSTRAINT ck_exercise_relation_undirected_order
@@ -200,33 +233,36 @@ CREATE TABLE exercise_relation (
 -- ---------------------------------------------------------------------
 
 CREATE TABLE plan (
-    id          integer      GENERATED ALWAYS AS IDENTITY,
-    coach_id    integer      NOT NULL,
-    title       varchar(120) NOT NULL,
-    notes       text,
-    created_at  timestamptz  NOT NULL DEFAULT now(),
-    updated_at  timestamptz  NOT NULL DEFAULT now(),
+    id                   integer      GENERATED ALWAYS AS IDENTITY,
+    coach_id             integer      NOT NULL,
+    title                varchar(120) NOT NULL,
+    notes                text,
+    target_duration_min  smallint,
+    status               plan_status  NOT NULL DEFAULT 'draft',
+    created_at           timestamptz  NOT NULL DEFAULT now(),
+    updated_at           timestamptz  NOT NULL DEFAULT now(),
     CONSTRAINT pk_plan PRIMARY KEY (id),
     CONSTRAINT ck_plan_title CHECK (btrim(title) <> ''),
+    CONSTRAINT ck_plan_target_duration CHECK (target_duration_min > 0),
+    CONSTRAINT ck_plan_target_when_not_draft
+        CHECK (status = 'draft' OR target_duration_min IS NOT NULL),
     CONSTRAINT fk_plan_coach
         FOREIGN KEY (coach_id) REFERENCES app_user (id) ON DELETE RESTRICT
 );
 
 CREATE TABLE plan_item (
-    id            integer  GENERATED ALWAYS AS IDENTITY,
-    plan_id       integer  NOT NULL,
-    exercise_id   integer  NOT NULL,
-    phase         phase    NOT NULL,
-    position      smallint NOT NULL,
-    duration_sec  integer  NOT NULL,
-    side          side     NOT NULL DEFAULT 'both',
-    reps_count    smallint,
+    id           integer  GENERATED ALWAYS AS IDENTITY,
+    plan_id      integer  NOT NULL,
+    exercise_id  integer  NOT NULL,
+    phase        phase    NOT NULL,
+    position     smallint NOT NULL,
+    side         side     NOT NULL DEFAULT 'both',
+    reps_count   smallint NOT NULL,
     CONSTRAINT pk_plan_item PRIMARY KEY (id),
     -- checked at COMMIT so that items can be reordered in one transaction
     CONSTRAINT uq_plan_item_position UNIQUE (plan_id, phase, position)
         DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT ck_plan_item_position CHECK (position >= 1),
-    CONSTRAINT ck_plan_item_duration CHECK (duration_sec > 0),
     CONSTRAINT ck_plan_item_reps CHECK (reps_count > 0),
     CONSTRAINT fk_plan_item_plan
         FOREIGN KEY (plan_id) REFERENCES plan (id) ON DELETE CASCADE,
@@ -255,8 +291,8 @@ CREATE TABLE session (
     CONSTRAINT ck_session_token_format CHECK (checkin_token ~ '^[A-Za-z0-9_-]{43}$'),
     CONSTRAINT ck_session_closed_at CHECK ((status = 'open') = (checkin_closed_at IS NULL)),
     CONSTRAINT ck_session_present_nonneg CHECK (participants_present >= 0),
-    CONSTRAINT ck_session_present_when_done
-        CHECK (status <> 'done' OR participants_present IS NOT NULL),
+    CONSTRAINT ck_session_present_when_closed
+        CHECK (status = 'open' OR participants_present IS NOT NULL),
     CONSTRAINT fk_session_coach
         FOREIGN KEY (coach_id) REFERENCES app_user (id) ON DELETE RESTRICT,
     CONSTRAINT fk_session_plan
@@ -264,14 +300,13 @@ CREATE TABLE session (
 );
 
 CREATE TABLE checkin (
-    id            integer     GENERATED ALWAYS AS IDENTITY,
-    session_id    integer     NOT NULL,
-    energy        smallint    NOT NULL,
-    poor_sleep    boolean     NOT NULL,
-    language      char(2)     NOT NULL,
-    submitted_at  timestamptz NOT NULL DEFAULT now(),
+    id            integer      GENERATED ALWAYS AS IDENTITY,
+    session_id    integer      NOT NULL,
+    energy        energy_level NOT NULL,
+    poor_sleep    boolean      NOT NULL,
+    language      char(2)      NOT NULL,
+    submitted_at  timestamptz  NOT NULL DEFAULT now(),
     CONSTRAINT pk_checkin PRIMARY KEY (id),
-    CONSTRAINT ck_checkin_energy CHECK (energy BETWEEN 1 AND 5),
     CONSTRAINT ck_checkin_language CHECK (language IN ('en', 'ru')),
     CONSTRAINT fk_checkin_session
         FOREIGN KEY (session_id) REFERENCES session (id) ON DELETE CASCADE
@@ -346,12 +381,23 @@ CREATE TABLE recommendation_decision (
 -- The indexes below support the main queries and FK checks.
 -- ---------------------------------------------------------------------
 
+-- DQ36: one edge per pair of exercises, whatever the type and direction:
+-- a pair is never both a variation and a progression, and A -> B and
+-- B -> A cannot both exist (no two-exercise progression cycle)
+CREATE UNIQUE INDEX uq_exercise_relation_pair
+    ON exercise_relation (LEAST(from_exercise_id, to_exercise_id), GREATEST(from_exercise_id, to_exercise_id));
 -- recursive candidate search (WITH RECURSIVE over the exercise graph)
 CREATE INDEX ix_exercise_relation_from_type ON exercise_relation (from_exercise_id, type);
 -- undirected edges are also followed backwards
 CREATE INDEX ix_exercise_relation_to        ON exercise_relation (to_exercise_id);
+-- "members of family X" (candidate search: shared family) and FK checks
+CREATE INDEX ix_exercise_family_member_family ON exercise_family_member (family_id);
+-- "which exercises does X compensate" and FK checks (RESTRICT on delete)
+CREATE INDEX ix_exercise_compensation_compensation ON exercise_compensation (compensation_exercise_id);
 -- session list and per-period KPIs
 CREATE INDEX ix_session_starts_at           ON session (starts_at);
+-- plan lock check (plan_is_locked) and FK checks
+CREATE INDEX ix_session_plan                ON session (plan_id);
 -- per-session aggregates and cascading deletes
 CREATE INDEX ix_checkin_session             ON checkin (session_id);
 CREATE INDEX ix_feedback_session            ON feedback (session_id);
@@ -365,31 +411,48 @@ CREATE INDEX ix_user_role_role              ON user_role (role_id);
 
 COMMENT ON SCHEMA kinetune IS 'Kinetune: hybrid recommendation system for adapting group training plans';
 
+COMMENT ON TYPE starting_pose IS 'Starting position; only balance is used by the rules (BR9, BR11, graph attribute)';
+COMMENT ON TYPE load_level    IS 'How much an exercise loads a joint (BR9, BR11, graph attribute); expert estimate of the coach';
+COMMENT ON TYPE energy_level  IS 'Self-rated energy in the check-in; low = the low-energy factor of BR9/BR10';
+COMMENT ON TYPE plan_status   IS 'draft -> completed -> reviewed; any change of a plan moves it back to draft';
+
 COMMENT ON TABLE app_user                IS 'Accounts that log in (coach, admin; client later). Personal data.';
 COMMENT ON TABLE role                    IS 'Application roles: coach, admin';
 COMMENT ON TABLE permission              IS 'Application permissions, code <resource>.<action>';
 COMMENT ON TABLE role_permission         IS 'Permissions of each role (M:N)';
 COMMENT ON TABLE user_role               IS 'Roles of each user (M:N)';
-COMMENT ON TABLE body_area               IS 'Body area reported in check-in discomfort; consists of muscles and joints';
+COMMENT ON TABLE body_area               IS 'Body part; consists of muscles and joints; some are shown in the check-in';
 COMMENT ON TABLE muscle                  IS 'Muscle; belongs to one body area';
 COMMENT ON TABLE joint                   IS 'Joint; belongs to one body area';
 COMMENT ON TABLE rule                    IS 'Business rules BR1–BR11 (id = BR number)';
-COMMENT ON TABLE exercise                IS 'Exercise library (predefined by the author)';
-COMMENT ON TABLE exercise_muscle         IS 'Muscles worked by an exercise (M:N)';
-COMMENT ON TABLE exercise_joint          IS 'Joints loaded by an exercise (M:N)';
+COMMENT ON TABLE exercise                IS 'Exercise library (loaded by the library import)';
+COMMENT ON TABLE exercise_muscle         IS 'Muscles of an exercise (M:N); primary = the stretched (target) muscle';
+COMMENT ON TABLE exercise_joint          IS 'Joints involved in an exercise (M:N) with their load level';
+COMMENT ON TABLE exercise_family         IS 'Movement family: exercises that can stand in for each other';
+COMMENT ON TABLE exercise_family_member  IS 'Families of an exercise (M:N; up to three in the library sheet)';
+COMMENT ON TABLE exercise_compensation   IS 'Acceptable compensating exercises of an exercise (BR6; any one satisfies the rule)';
 COMMENT ON TABLE exercise_relation       IS 'Exercise graph edges: variation / progression';
-COMMENT ON TABLE plan                    IS 'Reusable class plan (template)';
+COMMENT ON TABLE plan                    IS 'Plan blueprint built by the coach; checked by BR1–BR8 and reviewed before use';
 COMMENT ON TABLE plan_item               IS 'Exercise at a position within a phase of a plan';
-COMMENT ON TABLE session                 IS 'One class held with a plan; owns the check-in link';
+COMMENT ON TABLE session                 IS 'One class: a reviewed plan + decisions on recommendations + time, group, check-ins, attendance';
 COMMENT ON TABLE checkin                 IS 'Anonymous pre-class answer';
 COMMENT ON TABLE checkin_discomfort      IS 'Body areas marked as uncomfortable in a check-in';
 COMMENT ON TABLE feedback                IS 'Anonymous voluntary feedback after class';
 COMMENT ON TABLE recommendation          IS 'Suggestion generated for a plan item when check-in closes';
 COMMENT ON TABLE recommendation_decision IS 'Coach decision on a recommendation (1:1)';
 
-COMMENT ON COLUMN exercise.required_compensation_id IS 'Exercise that must follow this one before the end of class (BR6)';
-COMMENT ON COLUMN exercise.is_symmetric             IS 'false = asymmetric, performed per side (BR7)';
+COMMENT ON COLUMN body_area.is_in_checkin           IS 'true = shown in the check-in form; only these areas can trigger BR9/BR10';
+COMMENT ON COLUMN exercise.is_symmetric             IS 'false = asymmetric, performed per side (BR7); true also for Alternating / Side-to-Side exercises';
+COMMENT ON COLUMN exercise.rep_duration_sec         IS 'Whole seconds for ONE repetition; for a static exercise one repetition = one hold';
+COMMENT ON COLUMN exercise_joint.is_primary         IS 'Main joint of the exercise; used for sorting, filtering, display (not by the rules)';
+COMMENT ON COLUMN exercise_joint.load_level         IS 'Load on this joint, main or secondary: BR9/BR10 (high triggers), BR11 cascade, graph derivation';
 COMMENT ON COLUMN exercise_relation.is_directed     IS 'false = edge followed both ways; stored once with from < to';
-COMMENT ON COLUMN session.participants_present      IS 'Entered after class; base for K2 and K4';
+COMMENT ON COLUMN exercise_relation.is_manual       IS 'false = derived on import from families and attributes; true = manual progression';
+COMMENT ON COLUMN plan.target_duration_min          IS 'Planned class length in minutes (BR8: calculated duration within ±5 min); required unless draft';
+COMMENT ON COLUMN plan.status                       IS 'draft / completed / reviewed (BR1–BR8 check run and reviewed by the coach)';
+COMMENT ON COLUMN plan_item.reps_count              IS 'Repetitions: per side for an asymmetric exercise, total for a symmetric one; duration is calculated, see item_duration_sec()';
+COMMENT ON COLUMN session.status                    IS 'open -> closed -> reviewed (every recommendation decided, concrete plan re-checked) -> done';
+COMMENT ON COLUMN session.participants_present      IS 'Entered when the check-in is closed (required from closed on); base for BR9/BR10 shares, K2 and K4';
+COMMENT ON COLUMN checkin.energy                    IS 'low / normal / high; low = the low-energy factor of BR9/BR10';
 COMMENT ON COLUMN recommendation.form               IS 'What the rule called for: alternative (BR9) or replacement (BR10)';
 COMMENT ON COLUMN recommendation.is_warning         IS 'true = no suitable substitute found; general advice instead (BR11)';

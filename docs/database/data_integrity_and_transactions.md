@@ -2,7 +2,7 @@
 
 DBMS: PostgreSQL 18 · Backend: FastAPI + SQLAlchemy · Migrations: Alembic
 
-Rule IDs (DQ01–DQ33) refer to §6 of the data dictionary.
+Rule IDs (DQ01–DQ36) refer to §6 of the data dictionary.
 
 ---
 
@@ -22,7 +22,7 @@ Rule IDs (DQ01–DQ33) refer to §6 of the data dictionary.
 | Integrity type | What it guarantees | Mechanism in Kinetune | Examples |
 |---|---|---|---|
 | **Entity** | Every row is uniquely identifiable | `PRIMARY KEY` on every table: identity surrogate keys, or composite keys in junction tables | `exercise.id`; (`exercise_id`, `muscle_id`) in `exercise_muscle` |
-| **Domain** | Each value is of the right type and in the allowed range | Data types, `NOT NULL`, `CHECK`, PostgreSQL `ENUM` types | `energy BETWEEN 1 AND 5`; `phase` enum; `email = lower(email)` |
+| **Domain** | Each value is of the right type and in the allowed range | Data types, `NOT NULL`, `CHECK`, PostgreSQL `ENUM` types | `energy_level` and `phase` enums; `rating BETWEEN 1 AND 5`; `email = lower(email)` |
 | **Uniqueness** | No duplicates where the business forbids them | `UNIQUE` constraints and unique indexes | `exercise.name`; `session.checkin_token`; (`plan_id`, `phase`, `position`) |
 | **Referential** | No reference points to a missing row | `FOREIGN KEY` with an explicit `ON DELETE` rule (`RESTRICT`, `CASCADE`, `SET NULL`) | A check-in cannot reference a non-existent session; deleting a session cascades to its check-ins |
 | **Row-level business rules** | Columns of one row agree with each other | Multi-column `CHECK` | `is_warning = (candidate_exercise_id IS NULL)`; `(status = 'open') = (checkin_closed_at IS NULL)` |
@@ -31,15 +31,15 @@ Rule IDs (DQ01–DQ33) refer to §6 of the data dictionary.
 
 ### 2.2 Constraints (declarative)
 
-Declared in `db/01_schema.sql` (migration 0001) and changed by later migrations (`05_password_policy.sql`, `06_plan_and_session_model.sql`); the full list per column is in the data dictionary (§4). Every constraint has an explicit name (`pk_`, `fk_`, `uq_`, `ck_` prefix), so error messages say which rule was broken. Summary (counted in the database catalog at migration 0005):
+Declared in `db/01_schema.sql` (migration 0001) plus the password-hash check (`05_password_policy.sql`, migration 0004); the full list per column is in the data dictionary (§4). Every constraint has an explicit name (`pk_`, `fk_`, `uq_`, `ck_` prefix), so error messages say which rule was broken. Summary (counted in the database catalog at migration 0004):
 
 | Constraint type | Count (approx.) | Notes |
 |---|---|---|
-| PRIMARY KEY | 21 | One per table |
-| FOREIGN KEY | 28 | Every FK has `ON DELETE` set explicitly (dictionary §5). No FK is left with the implicit default. |
-| UNIQUE | 10 | Names, codes, e-mail, check-in token, plan item position, relation edge |
-| CHECK | 31 | Ranges (1–5, 1–3, `> 0`, 15–120 min), formats (regex on codes, argon2id hash), cross-column rules |
-| NOT NULL | most columns | NULL is allowed only where "unknown / not applicable" is a real state (e.g. `participants_present` before class, `target_duration_min` of a draft plan) |
+| PRIMARY KEY | 24 | One per table |
+| FOREIGN KEY | 31 | Every FK has `ON DELETE` set explicitly (dictionary §5). No FK is left with the implicit default. |
+| UNIQUE | 10 + 1 unique index | Names, codes, e-mail, family name, check-in token, plan item position; unique index `uq_exercise_relation_pair`: one edge per pair of exercises (DQ36) |
+| CHECK | 31 | Ranges (1–5, 1–3, `> 0`), formats (regex on codes, argon2id hash), cross-column rules |
+| NOT NULL | most columns | NULL is allowed only where "unknown / not applicable" is a real state (e.g. `participants_present` while the check-in is open, `target_duration_min` of a draft plan) |
 
 **Deferrable uniqueness.** The constraint UQ (`plan_id`, `phase`, `position`) is declared `DEFERRABLE INITIALLY DEFERRED`. Reordering exercises (swapping positions 2 and 3) would otherwise violate it in the middle of the transaction. With a deferred constraint, uniqueness is checked once, at `COMMIT`.
 
@@ -47,17 +47,17 @@ Declared in `db/01_schema.sql` (migration 0001) and changed by later migrations 
 
 ### 2.3 Triggers (procedural)
 
-Rules that need data from another table, or from the row's previous state, cannot be written as `CHECK`. They are triggers written in PL/pgSQL (`db/02_triggers.sql`: 14 triggers, plus the helper function `has_role(user_id, role_code)`; `db/06_plan_and_session_model.sql`: 4 more triggers and a new version of `fn_session_status`; 18 triggers in total). Every trigger raises an exception with a clear message and SQLSTATE `P0001` (or `23514` for check-like violations), so the API can map it to an HTTP 409/422 answer.
+Rules that need data from another table, or from the row's previous state, cannot be written as `CHECK`. They are triggers written in PL/pgSQL (`db/02_triggers.sql`: 18 triggers, plus the helper functions `has_role(user_id, role_code)` and `plan_is_locked(plan_id)`). Every trigger raises an exception with a clear message and SQLSTATE `P0001` (or `23514` for check-like violations), so the API can map it to an HTTP 409/422 answer.
 
 | Trigger (table, timing) | Rule | DQ |
 |---|---|---|
 | `trg_checkin_session_open`, `trg_checkin_discomfort_session_open` (BEFORE INSERT) | Accept only while the session is `open`. Takes a `FOR SHARE` lock on the session row (see §3.4). | DQ03 |
 | `trg_feedback_session_closed` (`feedback`; BEFORE INSERT) | Accept only when the session is `closed` or `done` | — |
-| `trg_session_status` (`session`; BEFORE INSERT/UPDATE) | A new session starts as `open`; only forward transitions open → closed → reviewed → done. `reviewed` only when every recommendation of the session has a decision. Sets `checkin_closed_at` when the session is closed. | DQ04, DQ32 |
+| `trg_session_status` (`session`; BEFORE INSERT/UPDATE) | A new session starts as `open`; only forward transitions open → closed → reviewed → done. `reviewed` only when every recommendation of the session has a decision. Sets `checkin_closed_at` when the session is closed. (`participants_present` from `closed` on is a CHECK, DQ05.) | DQ04, DQ32 |
 | `trg_session_plan_reviewed` (`session`; BEFORE INSERT/UPDATE of `plan_id`) | A session is created only from a `reviewed` plan. Locks the plan row `FOR SHARE` (§3.4). | DQ30 |
 | `trg_session_owner` (`session`; BEFORE INSERT/UPDATE) | The session's coach owns the plan and holds the `coach` role | DQ08, DQ21 |
 | `trg_plan_owner` (`plan`; BEFORE INSERT/UPDATE) | The plan's owner holds the `coach` role | DQ21 |
-| `trg_plan_status` (`plan`; BEFORE INSERT/UPDATE of `status`, `target_duration_min`) | A new plan starts as `draft`; draft → completed → reviewed, or back to `draft`; a changed target moves a completed/reviewed plan back to `draft`; a locked plan keeps its status and target | DQ29, DQ31 |
+| `trg_plan_status` (`plan`; BEFORE INSERT/UPDATE) | A new plan starts as `draft`; draft → completed → reviewed, or back to `draft`; any changed field (title, notes, target, owner) moves the plan back to `draft`; a locked plan cannot change at all (`updated_at` alone is not a change) | DQ29, DQ31 |
 | `trg_plan_item_guard` (`plan_item`; BEFORE INSERT/UPDATE/DELETE) | Rejects any item change of a locked plan; otherwise moves a completed/reviewed plan back to `draft`. Locks the plan row `FOR UPDATE` (§3.4). | DQ29, DQ31 |
 | `trg_plan_item_side` (`plan_item`; BEFORE INSERT/UPDATE) | A symmetric exercise has `side = 'both'` | DQ25 |
 | `trg_plan_set_updated_at` (`plan`; BEFORE UPDATE), `trg_plan_touch_from_item` (`plan_item`; AFTER INSERT/UPDATE/DELETE) | Keep `plan.updated_at` current | — |
@@ -79,13 +79,13 @@ The API (Pydantic models) validates every request before it reaches the database
 
 ### 2.5 Check queries
 
-The rules that concern the library or the data as a whole (DQ09–DQ12, DQ14, DQ17, DQ24, DQ26–DQ28, and the data checks of DQ30 and DQ32) are SQL queries stored in `db/checks/`. Each query returns the rows that **violate** the rule, so an empty result means the rule holds. They run:
+The rules that concern the library or the data as a whole (DQ09–DQ12, DQ14, DQ17, DQ24, DQ26–DQ28, DQ34, DQ35, and the data check of DQ30) are SQL queries stored in `db/checks/`. Each query returns the rows that **violate** the rule, so an empty result means the rule holds. They run:
 
 - at the end of every library/seed import, **inside the import transaction**: if any error-level check returns rows, the whole import is rolled back (§3.6);
 - in the automated tests (CI);
 - before the pilot, as part of the release checklist.
 
-Warning-level checks (DQ11, DQ13, DQ15, DQ17, DQ28, DQ32) are reported but do not fail the import.
+Warning-level checks (DQ11, DQ13, DQ15, DQ17, DQ28, DQ35) are reported but do not fail the import.
 
 ### 2.6 Integrity of personal data
 
@@ -120,7 +120,7 @@ session:  open ──► closed ──► reviewed ──► done
 **Protection of past sessions (plan lock).** If a session's plan could still change, the concrete plan of that session would change afterwards: its items, durations and the targets of its recommendations. Therefore:
 
 1. A session can be created only from a `reviewed` plan (DQ30).
-2. From that moment the plan is **locked** (DQ31), whatever the session's status: no item can be inserted, changed or deleted, and `target_duration_min` and `status` cannot change. Title and notes can still be edited.
+2. From that moment the plan is **locked** (DQ31), whatever the session's status: no item can be inserted, changed or deleted, and no plan field (title, notes, target duration, status) can change.
 3. To change a locked plan, the coach duplicates it (`duplicate_plan()`, T9) and edits the copy, which starts as a new `draft`. Later sessions use the copy; earlier sessions keep the original.
 
 The lock is calculated (`plan_is_locked()` = a session exists), not stored, so it cannot get out of step with the sessions.
@@ -172,7 +172,8 @@ COMMIT;
 ```sql
 BEGIN;
   UPDATE session
-     SET status = 'closed'                 -- trigger sets checkin_closed_at
+     SET status = 'closed',                -- trigger sets checkin_closed_at
+         participants_present = :present   -- required to close (DQ05)
    WHERE id = :sid AND status = 'open'
   RETURNING id;                            -- 0 rows -> already closed: stop, return current state
   -- read check-in aggregates (now stable: no new check-ins can arrive, §3.4)
@@ -183,6 +184,7 @@ COMMIT;
 
 - **Idempotent.** The `WHERE status = 'open'` condition makes a second click (or a second browser tab) a no-op: it updates 0 rows and the API returns the existing recommendations.
 - **Consistent snapshot.** Recommendations are calculated from exactly the set of check-ins that existed when the status changed.
+- **Base of the shares.** The coach enters the number of participants present when closing; it is the base for BR9/BR10 (if there are more check-ins than participants present, the number of check-ins is the base and the coach sees a warning).
 - **The LLM is not called here.** Every recommendation is first saved with its template explanation (`explanation_source = 'template'`), so the coach always gets a complete, rule-based result (NFR9).
 
 #### T3 — LLM enrichment (after T2, optional)
@@ -229,22 +231,22 @@ BEGIN;
   UPDATE plan_item SET position = ..., ... WHERE id = ...;   -- deferred UNIQUE allows swaps
   INSERT INTO plan_item (...) VALUES (...);
   -- triggers: locked plan -> P0001 (DQ31), whole save rolled back;
-  --           otherwise a completed/reviewed plan goes back to 'draft'
+  --           otherwise any change moves the plan back to 'draft'
 COMMIT;   -- deferred UNIQUE (plan_id, phase, position) checked here
 ```
 
 - **Optimistic locking.** The client sends the `updated_at` value it loaded. If the plan was saved meanwhile (e.g. in another tab), the update matches 0 rows and the coach is asked to reload, so no change is silently overwritten.
-- **Locked plan.** A plan used by a session cannot be saved with item or target changes (DQ31). The API checks `plan_is_locked()` first and offers "duplicate" (T9); the trigger is the final guarantee.
+- **Locked plan.** A plan used by a session cannot be saved with any change (DQ31). The API checks `plan_is_locked()` first and offers "duplicate" (T9); the trigger is the final guarantee.
 - **Status.** Saving a changed plan moves it back to `draft`. When the coach finishes, the API sets `status = 'completed'`. The coach then runs the BR1–BR8 check on `v_plan_item`, reviews the warnings, and the API sets `status = 'reviewed'`. Each status change is a short transaction of its own.
 
-#### T6 — Coach enters attendance after class (US3.5)
+#### T6 — Coach marks the class as done (US3.5)
 
 ```sql
-UPDATE session SET participants_present = :n, status = 'done'
+UPDATE session SET status = 'done', participants_present = :n   -- :n optional correction
  WHERE id = :sid AND status = 'reviewed';
 ```
 
-This is a single statement and therefore atomic by itself. The CHECK constraint ensures `participants_present` is not NULL when the status becomes `done` (DQ05). `participants_present` can also be entered earlier, without changing the status (it is the base of BR9/BR10 shares once known).
+This is a single statement and therefore atomic by itself. `participants_present` was already entered when the check-in was closed (T2); the coach may correct it here. The CHECK constraint keeps it not NULL from `closed` on (DQ05).
 
 #### T7 — Admin revokes a role or deactivates a user
 
@@ -323,12 +325,12 @@ In every case the transaction is rolled back completely; the API never commits a
 
 ### 3.6 Bulk operations: library import and migrations
 
-**Library import** (seed CSV → `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_relation`):
+**Library import** (spreadsheet export → `exercise`, `exercise_muscle`, `exercise_joint`, `exercise_family`, `exercise_family_member`, `exercise_compensation`, `exercise_relation`):
 
 ```text
 BEGIN;
-  load CSV rows (COPY)  ->  insert into library tables
-  run error-level check queries (DQ09, DQ10, DQ12, DQ14, DQ26, DQ27)
+  validate all rows  ->  insert into library tables  ->  derive graph edges
+  run error-level check queries (DQ09, DQ10, DQ12, DQ14, DQ26, DQ27, DQ34)
   any violation -> ROLLBACK (the library stays as it was) and print the failing rows
 COMMIT;
 ```

@@ -1,8 +1,12 @@
-"""Initial schema: tables, constraints, indexes (01_schema.sql) and triggers (02_triggers.sql)
+"""Initial schema: tables, constraints, indexes (01_schema.sql), triggers, functions and views (02_triggers.sql)
 
 Revision ID: 0001
 Revises:
 Create Date: 2026-11-14
+
+Baseline: before the first deployment the plan and session model (former
+migration 0005), exercise families, M:N compensation and the new enums
+were consolidated into this migration.
 """
 from pathlib import Path
 

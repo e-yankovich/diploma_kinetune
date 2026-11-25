@@ -78,7 +78,7 @@ GRANT INSERT, DELETE ON plan TO app_write;
 GRANT UPDATE (title, notes) ON plan TO app_write;
 
 GRANT INSERT, DELETE ON plan_item TO app_write;
-GRANT UPDATE (exercise_id, phase, position, duration_sec, side, reps_count) ON plan_item TO app_write;
+GRANT UPDATE (exercise_id, phase, position, side, reps_count) ON plan_item TO app_write;
 
 GRANT INSERT, DELETE ON session TO app_write;     -- DELETE cascades to the session's data
 GRANT UPDATE (group_name, starts_at, status, participants_present) ON session TO app_write;

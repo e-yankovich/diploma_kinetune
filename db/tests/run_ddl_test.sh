@@ -10,6 +10,5 @@ psql -q -d postgres -c "DROP DATABASE IF EXISTS $DB" -c "CREATE DATABASE $DB"
 psql -q -d $DB -v ON_ERROR_STOP=1 --single-transaction -f 01_schema.sql
 psql -q -d $DB -v ON_ERROR_STOP=1 --single-transaction -f 02_triggers.sql
 PGOPTIONS="-c client_min_messages=warning" psql -q -d $DB -v ON_ERROR_STOP=1 --single-transaction -f 04_roles_privileges.sql
-psql -q -d $DB -v ON_ERROR_STOP=1 --single-transaction -f 06_plan_and_session_model.sql
 psql -q -d $DB -v ON_ERROR_STOP=1 -o /dev/null -f tests/ddl_smoke_test.sql 2>&1 | sed 's/^psql:[^ ]* //'
 psql -q -d postgres -c "DROP DATABASE $DB"
