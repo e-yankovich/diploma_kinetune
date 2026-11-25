@@ -1,0 +1,5 @@
+# Accepted lint exceptions (each one with a reason).
+# /health takes no input, so it has no 4XX response: only 200 or 503.
+schemas/openapi.json:
+  operation-4xx-response:
+    - '#/paths/~1health/get/responses'

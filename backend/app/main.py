@@ -17,8 +17,15 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Kinetune API",
         version="0.1.0",
-        description="Hybrid recommendation system for adapting group training plans. "
-        "Prototype slice: the exercise library (read-only).",
+        description=(
+            "Hybrid recommendation system for adapting group training plans. "
+            "Prototype slice: the exercise library (read-only). "
+            "Guides and examples: docs/api/ in the repository."
+        ),
+        openapi_tags=[
+            {"name": "Exercise library", "description": "Exercises, families and the two exercise graphs"},
+            {"name": "Health", "description": "Service and database status"},
+        ],
     )
     app.add_middleware(RequestLogMiddleware)
     register_error_handlers(app)

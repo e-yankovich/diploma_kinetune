@@ -1,0 +1,32 @@
+# Runnable examples (VS Code "REST Client" or JetBrains HTTP client).
+# Start the stack first: docs/api/guides/getting-started.md
+
+@base = http://localhost:8000
+
+### Health
+GET {{base}}/health
+
+### List active exercises, sorted by name
+GET {{base}}/api/v1/exercises
+
+### Filter: family 1, difficulty 1
+GET {{base}}/api/v1/exercises?family_id=1&difficulty=1&sort=name
+
+### Search by name, include inactive exercises
+GET {{base}}/api/v1/exercises?q=pigeon&include_inactive=true
+
+### One exercise with joints, muscles and graphs
+GET {{base}}/api/v1/exercises/1
+
+### Families
+GET {{base}}/api/v1/families
+
+### Error: unknown exercise (404 not_found)
+GET {{base}}/api/v1/exercises/9999
+
+### Error: invalid filter (422 validation_error)
+GET {{base}}/api/v1/exercises?difficulty=7
+
+### Error: correlate with your own request id
+GET {{base}}/api/v1/exercises?mode=yoga
+X-Request-ID: my-test-request-1

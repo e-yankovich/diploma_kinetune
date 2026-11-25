@@ -6,6 +6,7 @@ from fastapi import APIRouter, Path, Query
 
 from app.api.deps import ExerciseServiceDep
 from app.repositories.exercise_repository import ExerciseFilter
+from app.schemas.errors import NOT_FOUND, PUBLIC, UNAVAILABLE, VALIDATION
 from app.schemas.exercise import (
     ExerciseDetail,
     ExerciseMode,
@@ -15,10 +16,12 @@ from app.schemas.exercise import (
     StartingPose,
 )
 
-router = APIRouter(tags=["Exercise library"])
+router = APIRouter(tags=["Exercise library"], responses={**VALIDATION, **UNAVAILABLE})
 
 
-@router.get("/exercises", response_model=list[ExerciseSummary], summary="List exercises")
+@router.get(
+    "/exercises", response_model=list[ExerciseSummary], summary="List exercises", openapi_extra=PUBLIC
+)
 async def list_exercises(
     service: ExerciseServiceDep,
     q: Annotated[str | None, Query(min_length=2, max_length=100, description="Part of the name")] = None,
@@ -41,13 +44,21 @@ async def list_exercises(
     return await service.list_exercises(flt)
 
 
-@router.get("/exercises/{exercise_id}", response_model=ExerciseDetail, summary="Get one exercise")
+@router.get(
+    "/exercises/{exercise_id}",
+    response_model=ExerciseDetail,
+    summary="Get one exercise",
+    responses=NOT_FOUND,
+    openapi_extra=PUBLIC,
+)
 async def get_exercise(
     service: ExerciseServiceDep, exercise_id: Annotated[int, Path(gt=0)]
 ) -> ExerciseDetail:
     return await service.get_exercise(exercise_id)
 
 
-@router.get("/families", response_model=list[FamilyOut], summary="List exercise families")
+@router.get(
+    "/families", response_model=list[FamilyOut], summary="List exercise families", openapi_extra=PUBLIC
+)
 async def list_families(service: ExerciseServiceDep) -> list[FamilyOut]:
     return await service.list_families()

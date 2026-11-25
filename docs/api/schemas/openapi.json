@@ -1,0 +1,745 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kinetune API",
+    "description": "Hybrid recommendation system for adapting group training plans. Prototype slice: the exercise library (read-only). Guides and examples: docs/api/ in the repository.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Service and database status",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/exercises": {
+      "get": {
+        "tags": [
+          "Exercise library"
+        ],
+        "summary": "List exercises",
+        "operationId": "list_exercises_api_v1_exercises_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Part of the name",
+              "title": "Q"
+            },
+            "description": "Part of the name"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ExerciseMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "starting_pose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/StartingPose"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Starting Pose"
+            }
+          },
+          {
+            "name": "difficulty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 3,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Difficulty"
+            }
+          },
+          {
+            "name": "family_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Family Id"
+            }
+          },
+          {
+            "name": "include_inactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Inactive"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ExerciseSort",
+              "default": "name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExerciseSummary"
+                  },
+                  "title": "Response List Exercises Api V1 Exercises Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid path or query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/exercises/{exercise_id}": {
+      "get": {
+        "tags": [
+          "Exercise library"
+        ],
+        "summary": "Get one exercise",
+        "operationId": "get_exercise_api_v1_exercises__exercise_id__get",
+        "parameters": [
+          {
+            "name": "exercise_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "title": "Exercise Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExerciseDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid path or query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/families": {
+      "get": {
+        "tags": [
+          "Exercise library"
+        ],
+        "summary": "List exercise families",
+        "operationId": "list_families_api_v1_families_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FamilyOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Families Api V1 Families Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid path or query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable machine-readable code",
+            "examples": [
+              "not_found"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable message",
+            "examples": [
+              "Exercise 9999 does not exist"
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Only for validation_error"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id",
+            "description": "Also sent in the X-Request-ID header; quote it when reporting a problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "location": {
+            "type": "string",
+            "title": "Location",
+            "examples": [
+              "query.difficulty"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "examples": [
+              "Input should be less than or equal to 3"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "location",
+          "message"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse"
+      },
+      "ExerciseDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExerciseMode"
+          },
+          "starting_pose": {
+            "$ref": "#/components/schemas/StartingPose"
+          },
+          "difficulty": {
+            "type": "integer",
+            "title": "Difficulty"
+          },
+          "is_symmetric": {
+            "type": "boolean",
+            "title": "Is Symmetric"
+          },
+          "rep_duration_sec": {
+            "type": "integer",
+            "title": "Rep Duration Sec"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "families": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Families"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "joints": {
+            "items": {
+              "$ref": "#/components/schemas/JointLoad"
+            },
+            "type": "array",
+            "title": "Joints"
+          },
+          "muscles": {
+            "items": {
+              "$ref": "#/components/schemas/MuscleRef"
+            },
+            "type": "array",
+            "title": "Muscles"
+          },
+          "compensations": {
+            "items": {
+              "$ref": "#/components/schemas/ExerciseRef"
+            },
+            "type": "array",
+            "title": "Compensations"
+          },
+          "variations": {
+            "items": {
+              "$ref": "#/components/schemas/Variation"
+            },
+            "type": "array",
+            "title": "Variations"
+          },
+          "regressions": {
+            "items": {
+              "$ref": "#/components/schemas/ExerciseRef"
+            },
+            "type": "array",
+            "title": "Regressions"
+          },
+          "progressions": {
+            "items": {
+              "$ref": "#/components/schemas/ExerciseRef"
+            },
+            "type": "array",
+            "title": "Progressions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "starting_pose",
+          "difficulty",
+          "is_symmetric",
+          "rep_duration_sec",
+          "is_active",
+          "families",
+          "description",
+          "joints",
+          "muscles",
+          "compensations",
+          "variations",
+          "regressions",
+          "progressions"
+        ],
+        "title": "ExerciseDetail"
+      },
+      "ExerciseMode": {
+        "type": "string",
+        "enum": [
+          "dynamic",
+          "static",
+          "stato_dynamic"
+        ],
+        "title": "ExerciseMode"
+      },
+      "ExerciseRef": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "difficulty": {
+            "type": "integer",
+            "title": "Difficulty"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "difficulty"
+        ],
+        "title": "ExerciseRef"
+      },
+      "ExerciseSort": {
+        "type": "string",
+        "enum": [
+          "name",
+          "difficulty"
+        ],
+        "title": "ExerciseSort"
+      },
+      "ExerciseSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExerciseMode"
+          },
+          "starting_pose": {
+            "$ref": "#/components/schemas/StartingPose"
+          },
+          "difficulty": {
+            "type": "integer",
+            "title": "Difficulty"
+          },
+          "is_symmetric": {
+            "type": "boolean",
+            "title": "Is Symmetric"
+          },
+          "rep_duration_sec": {
+            "type": "integer",
+            "title": "Rep Duration Sec"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "families": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Families"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "starting_pose",
+          "difficulty",
+          "is_symmetric",
+          "rep_duration_sec",
+          "is_active",
+          "families"
+        ],
+        "title": "ExerciseSummary"
+      },
+      "FamilyOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "exercise_count": {
+            "type": "integer",
+            "title": "Exercise Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "exercise_count"
+        ],
+        "title": "FamilyOut"
+      },
+      "JointLoad": {
+        "properties": {
+          "joint": {
+            "type": "string",
+            "title": "Joint"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary"
+          },
+          "load_level": {
+            "$ref": "#/components/schemas/LoadLevel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "joint",
+          "is_primary",
+          "load_level"
+        ],
+        "title": "JointLoad"
+      },
+      "LoadLevel": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "LoadLevel"
+      },
+      "MuscleRef": {
+        "properties": {
+          "muscle": {
+            "type": "string",
+            "title": "Muscle"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "muscle",
+          "is_primary"
+        ],
+        "title": "MuscleRef"
+      },
+      "StartingPose": {
+        "type": "string",
+        "enum": [
+          "seated",
+          "standing",
+          "balance",
+          "quadruped",
+          "downward_dog",
+          "supine",
+          "prone",
+          "kneeling",
+          "front_split"
+        ],
+        "title": "StartingPose"
+      },
+      "Variation": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "difficulty": {
+            "type": "integer",
+            "title": "Difficulty"
+          },
+          "level": {
+            "$ref": "#/components/schemas/VariationLevel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "difficulty",
+          "level"
+        ],
+        "title": "Variation"
+      },
+      "VariationLevel": {
+        "type": "string",
+        "enum": [
+          "same_level",
+          "easier",
+          "harder"
+        ],
+        "title": "VariationLevel",
+        "description": "Level of a variation compared with the exercise (business rules v2, two graphs)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Exercise library",
+      "description": "Exercises, families and the two exercise graphs"
+    },
+    {
+      "name": "Health",
+      "description": "Service and database status"
+    }
+  ]
+}

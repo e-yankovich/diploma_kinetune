@@ -1,0 +1,11 @@
+# Redocly CLI configuration: lint rules for the API specification
+extends:
+  - recommended
+apis:
+  kinetune@v1:
+    root: ./schemas/openapi.json
+rules:
+  operation-4xx-response: error
+  info-license: off
+  no-server-example.com: off
+  no-empty-servers: off
