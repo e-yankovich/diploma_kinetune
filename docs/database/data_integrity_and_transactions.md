@@ -79,13 +79,13 @@ The API (Pydantic models) validates every request before it reaches the database
 
 ### 2.5 Check queries
 
-The rules that concern the library or the data as a whole (DQ09–DQ12, DQ14, DQ17, DQ24, DQ26–DQ28, DQ34, DQ35, and the data check of DQ30) are SQL queries stored in `db/checks/`. Each query returns the rows that **violate** the rule, so an empty result means the rule holds. They run:
+The rules that concern the library or the data as a whole (DQ09–DQ17, DQ24, DQ26–DQ28, DQ34, DQ35, and the data check of DQ30) are SQL queries stored in `db/checks/`. Each query returns the rows that **violate** the rule, so an empty result means the rule holds. They run:
 
 - at the end of every library/seed import, **inside the import transaction**: if any error-level check returns rows, the whole import is rolled back (§3.6);
 - in the automated tests (CI);
 - before the pilot, as part of the release checklist.
 
-Warning-level checks (DQ11, DQ13, DQ15, DQ17, DQ28, DQ35) are reported but do not fail the import.
+Warning-level checks (DQ11, DQ13, DQ15, DQ16, DQ17, DQ28, DQ35) are reported but do not fail the import. The expected result on the test data is listed in `test_data.md` §2.6.
 
 ### 2.6 Integrity of personal data
 

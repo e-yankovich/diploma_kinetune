@@ -15,6 +15,8 @@ COPY alembic.ini \
 COPY migrations ./migrations
 # library import script; the workbook itself is mounted at run time (/data)
 COPY library/import_library.py ./library/
+# data quality checks, run by the import inside its transaction
+COPY checks ./checks
 
 # run without root privileges
 RUN useradd --system --no-create-home migrator

@@ -85,7 +85,8 @@ services:
     entrypoint: ["python", "library/import_library.py"]
     command: ["/data/kinetune_library.xlsx"]
 
-  # Test/demo data — NOT part of the default stack. Load it explicitly with:
+  # Test/demo data — NOT part of the default stack. Load it AFTER the library
+  # import (it references the imported exercises by name):
   #   docker compose --profile test run --rm seed-test
   # Guarded: it refuses to run on a database that already has users.
   seed-test:

@@ -63,4 +63,98 @@ Exercise families are not reference data: they are created by the library import
 
 ## 2. Test data (`db/seed/test_data.sql`)
 
-To be rewritten on top of the imported library: users, plans and sessions in every status, check-ins, recommendations and decisions, and the edge cases of the recommendation rules.
+Development, demo and test data only; never production. It is built **on top of the imported library**: exercises are referenced by name (`pg_temp.ex('…')`), never by id, so the file works with any import of the current workbook. If a name is missing, the seed stops with a clear message.
+
+**Run order:** migrations (0001–0004) → library import → seed:
+
+```bash
+docker compose up -d
+docker compose --profile import run --rm import-library
+docker compose --profile test run --rm seed-test
+```
+
+Guards: the seed refuses to run if the database already has users, or if the library is empty. Ids of plans, plan items (plan id × 100 + n), sessions and recommendations are explicit, so this page can refer to them; the sequences are moved past them at the end. All timestamps are relative to the load time: done sessions are in the past, the open one in the future.
+
+### 2.1 Accounts
+
+All test accounts share the password `Test-Only-2026!` (argon2id hashes).
+
+| id | E-mail | Role | Active |
+|---|---|---|---|
+| 1 | `admin@kinetune.test` | admin | yes |
+| 2 | `laura@kinetune.test` | coach (the demo coach) | yes |
+| 3 | `former.coach@kinetune.test` | coach | **no** — deactivated after its plan and session were created (history stays) |
+
+### 2.2 Plans (blueprints)
+
+| id | Title | Status | Target (min) | Calculated (min) | Locked | What it shows |
+|---|---|---|---|---|---|---|
+| 1 | Hips and hamstrings | reviewed | 40 | 39.8 | yes (S1, S2) | Main demo plan. Compensation **present** (Child's Pose after the quadriceps stretches, Kneeling Hip Shifts after Pigeon and Frog). Asymmetric exercise on **both sides in one item** (Ankle Circles – Standing, item 103) and as **two items** left/right (Half Split Hamstring Stretch – Static, 107/108). Uses Frog Stretch – Dynamic, which is deactivated later (**inactive exercise**). |
+| 2 | Back care | reviewed | 22 | 21.9 | yes — **by the closed session 3** (also S6) | Compensation **missing**: Supine Spinal Twist – Static (item 214) is followed by none of its compensating exercises (Knees to Chest, Happy Baby Pose): BR6 warning. |
+| 3 | Full body flow | reviewed | 20 | 20.3 | yes (S4, S5) | Its only difficulty-3 exercise (Quadriceps Stretch – Half-Kneeling – Dynamic, item 309) has **no regression** in the library. |
+| 4 | Shoulders (work in progress) | draft | — | 2.1 | no | A draft without a target duration |
+| 5 | Splits preparation | completed | 45 | 5.3 | no | Completed, not reviewed; the target does not match the calculated duration (BR8 case for the plan check) |
+| 6 | Ankles and calves | reviewed | 8 | 8.0 | no | Reviewed but not used by any session; contains a stato-dynamic exercise |
+| 7 | Hips and hamstrings (copy) | draft | 40 | 39.8 | no | **Duplicate** of plan 1 made with `duplicate_plan(1)` (items 701–718) |
+| 8 | Evening relaxation | reviewed | 9 | 9.3 | yes (S7) | Plan of the deactivated coach |
+
+### 2.3 Sessions
+
+| id | Plan | Status | Present | Check-ins | What it shows |
+|---|---|---|---|---|---|
+| 1 | 1 | done (14 days ago) | 8 | 6 | Knee discomfort 4 of 8 = **exactly 50 %**, ≥ 2 people → **BR10** replacement. Pelvis/hips 1 of 8 → BR9 alternatives. Accepted and declined decisions; 3 feedback answers (K4 = 37.5 %). The concrete plan (`v_session_plan`) shows item 111 replaced. |
+| 2 | 1 | reviewed (class in 30 min) | 2 | 2 | Knee 1 of 2 = **50 % with one person** → BR9 alternative, **not** BR10 (BR10 needs ≥ 2 people) |
+| 3 | 2 | closed (class in 45 min) | 5 | 7 | **More check-ins than present** → the base is the number of check-ins (7); lower back 3 of 7 = 43 % → BR9. One recommendation is **undecided**, so the session cannot become `reviewed` yet (DQ32). |
+| 4 | 3 | open | — | 2 | The check-in link is active; no recommendations yet |
+| 5 | 3 | done (7 days ago) | 6 | 6 | Poor sleep 2 of 6 = 33 % on the difficulty-3 exercise without a regression → **no substitute**: BR11 warning (accepted = the coach applies the general advice). Ankle discomfort is reported, but plan 3 has no high ankle load, so it triggers nothing. |
+| 6 | 2 | done (3 days ago) | 4 | **0** | **No check-ins**: no recommendations; reviewed at once |
+| 7 | 8 | done (30 days ago) | 5 | 3 | Session of the deactivated coach; nothing reported |
+
+Check-ins use the energy scale low / normal / high, and discomfort only in body areas shown in the check-in (`is_in_checkin`): knee, lower back, pelvis and hips, wrists and hands, ankle and foot.
+
+### 2.4 Recommendations
+
+Every candidate comes from the graphs: it shares a family and a main (target) muscle with the original exercise and is **not a progression** (harder version) of it. "Step" refers to the BR11 cascade (business rules v2).
+
+| id | Session | Item → candidate | Rule / form | Factor, share | Cascade step | Decision |
+|---|---|---|---|---|---|---|
+| 1 | 1 | Quadriceps Stretch – Half-Kneeling – Static → Quadriceps Stretch – Standing – Static | BR10 replacement | knee 4/8 = 50 % | 2: lower knee load, same-level variation | accepted (LLM explanation) |
+| 2 | 1 | Quadriceps Stretch – Half-Kneeling – Dynamic → Quadriceps Stretch – Standing – Dynamic | BR10 replacement | knee 4/8 = 50 % | 2: lower knee load, same-level variation | declined |
+| 3 | 1 | Pigeon Stretch – Static → Supine Figure-Four Stretch – Static | BR9 alternative | pelvis/hips 1/8 | 2: lower hip load; no same-level variation, so a regression | accepted |
+| 4 | 1 | Pigeon Stretch – Dynamic → Supine Figure-Four Stretch – Dynamic | BR9 alternative | pelvis/hips 1/8 | 2: regression | declined |
+| 5 | 2 | Quadriceps Stretch – Half-Kneeling – Static → Quadriceps Stretch – Standing – Static | BR9 alternative | knee 1/2 = 50 %, one person | 2: same-level variation | accepted |
+| 6 | 2 | Quadriceps Stretch – Half-Kneeling – Dynamic → Quadriceps Stretch – Standing – Dynamic | BR9 alternative | knee 1/2, one person | 2: same-level variation | declined |
+| 7 | 3 | Bow Pose – Prone – Static → Thoracic Extension – Prone on Forearms – Static | BR9 alternative | lower back 3/7 (base = check-ins) | 1: no load on the lumbar spine, same-level variation | accepted |
+| 8 | 3 | Bow Pose – Prone – Dynamic → Thoracic Extension – Prone on Forearms – Dynamic | BR9 alternative | lower back 3/7 | 1: same-level variation | **undecided** |
+| 9 | 5 | Quadriceps Stretch – Half-Kneeling – Dynamic → (none) | BR11 warning | poor sleep 2/6 | high-difficulty exercise: 1) regression — none → warning | accepted |
+
+### 2.5 Edge cases covered
+
+| Edge case | Where |
+|---|---|
+| Exactly 50 % (and ≥ 2 people) → replacement | S1, recommendations 1–2 |
+| 50 % with one person → alternative only | S2, recommendations 5–6 |
+| No substitute → warning with general advice | S5, recommendation 9 |
+| More check-ins than participants present | S3 (7 check-ins, 5 present) |
+| 0 check-ins | S6 |
+| Undecided recommendation (session stays closed) | S3, recommendation 8 |
+| Inactive exercise in old plans | Frog Stretch – Dynamic in plans 1 and 7 |
+| Plan item needing compensation — present / missing | plan 1 (present), plan 2 item 214 (missing) |
+| Asymmetric exercise on both sides | item 103 (`side = both` in one item), items 107/108 (left + right) |
+| Plans in every status, a locked plan, a duplicate | plans 1–8 (draft 4, 7; completed 5; reviewed 1, 2, 3, 6, 8; plan 2 locked by the closed S3; plan 7 = copy of plan 1) |
+| Sessions in every status | open S4, closed S3, reviewed S2, done S1, S5, S6, S7 |
+| Deactivated coach with history | user 3, plan 8, S7 |
+
+### 2.6 Data quality checks on the test data
+
+`db/checks/data_quality_checks.sql` on the imported library + this seed returns **no error rows** and exactly these **intended warnings**:
+
+| Check | Warning | Why it is intended |
+|---|---|---|
+| DQ11 | Kneeling Hip Shifts – Side-to-Side – Dynamic: used in plans, no variation and no regression | Its family "hip mobility" has one exercise (allowed in the MVP) |
+| DQ11 | Wrist Circles – Seated – Dynamic: used in plans, no variation and no regression | Its family "wrist mobility" has one exercise (allowed in the MVP) |
+| DQ15 | Session 3: 7 check-ins but 5 participants present | Edge case "more check-ins than present" |
+| DQ16 | Plan 1 uses the inactive exercise Frog Stretch – Dynamic | Edge case "inactive exercise" |
+| DQ16 | Plan 7 uses the inactive exercise Frog Stretch – Dynamic | The duplicate of plan 1 |
+| DQ35 | Family "hip mobility" has 1 exercise | Author's decision (MVP) |
+| DQ35 | Family "wrist mobility" has 1 exercise | Author's decision (MVP) |

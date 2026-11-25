@@ -23,8 +23,10 @@ docker compose --profile import run --rm import-library /data/kinetune_library.x
 docker compose --profile import run --rm import-library
 ```
 
-Optionally load the demo/test dataset (coaches, a demo exercise library, sessions,
-check-ins and recommendations). It refuses to run if the database already has users:
+Optionally load the test/demo dataset on top of the imported library (accounts, plans and
+sessions in every status, check-ins, recommendations and decisions; see
+[`docs/database/test_data.md`](docs/database/test_data.md) §2). It refuses to run if the
+database already has users or if the library is empty:
 
 ```bash
 docker compose --profile test run --rm seed-test
@@ -157,7 +159,8 @@ psql "host=localhost port=${DB_PORT} user=kinetune_reader dbname=kinetune" \
 The privileges test uses `SET ROLE` to switch into each login role and rolls everything
 back; it needs a superuser connection. The data-quality checks run with any `app_read`
 role: an empty result means every rule holds; `warning` rows are reported but accepted
-(the demo dataset intentionally contains a few), while any `error` row must be fixed.
+(the test dataset intentionally produces seven, listed in `test_data.md` §2.6), while any
+`error` row must be fixed.
 
 ## Changing the schema
 

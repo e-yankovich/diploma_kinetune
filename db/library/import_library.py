@@ -54,6 +54,11 @@ NUMBERED_COLUMNS = {
 LOAD_COLUMN = re.compile(r"^Load: (.+)$")
 IGNORED_COLUMNS = {"Notes"}
 
+# data quality checks run inside the import transaction (db/checks/);
+# error rows of these checks roll the import back
+CHECKS_FILE = Path(__file__).resolve().parents[1] / "checks" / "data_quality_checks.sql"
+LIBRARY_CHECKS = {"DQ09", "DQ10", "DQ12", "DQ14", "DQ26", "DQ27", "DQ34"}
+
 MAX_EXERCISE_NAME = 120
 MAX_FAMILY_NAME = 64
 MAX_SMALLINT = 32767
@@ -751,6 +756,19 @@ def write_links(cur, exercises: list[Exercise], ids: dict[str, int], family_ids:
         sorted((ids[e], ids[h], manual) for (e, h), manual in edges.progressions.items()))
 
 
+def run_quality_checks(cur, report: Report) -> None:
+    """Run db/checks/data_quality_checks.sql on the written data (same transaction)."""
+    if not CHECKS_FILE.exists():
+        report.warning("database checks", None, None, str(CHECKS_FILE), "file not found: checks skipped")
+        return
+    sql = "\n".join(line for line in CHECKS_FILE.read_text(encoding="utf-8").splitlines()
+                    if not line.strip().upper().startswith("SET SEARCH_PATH"))
+    cur.execute(sql)
+    for check_id, severity, detail in cur.fetchall():
+        if check_id in LIBRARY_CHECKS and severity == "error":
+            report.error("database checks", None, check_id, None, detail)
+
+
 def summarize(cur, exercises: list[Exercise], edges: Edges,
               counts: dict[str, int], update: bool) -> dict[str, int]:
     # variation pairs as the database sees them (view over family membership)
@@ -846,6 +864,9 @@ def main(argv: list[str] | None = None) -> int:
             # families that are no longer used by any exercise
             cur.execute("""DELETE FROM exercise_family f
                             WHERE NOT EXISTS (SELECT 1 FROM exercise_family_member m WHERE m.family_id = f.id)""")
+            run_quality_checks(cur, report)
+            if report.errors:
+                raise psycopg.Rollback(tx)
             summary = summarize(cur, exercises, edges, counts, args.update)
             if args.dry_run:
                 raise psycopg.Rollback(tx)

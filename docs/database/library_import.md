@@ -156,6 +156,8 @@ WARNING Library, row 47, column "Family", value 'hip mobility': family has only 
 
 After validation the rows are inserted; the database constraints (CHECK, UNIQUE, FK, the unique index per pair and type) are the final guarantee. A database error is printed with the constraint name and the whole import is rolled back.
 
+Finally, inside the same transaction, the import runs `db/checks/data_quality_checks.sql` on the written data. An **error** row of a library check (DQ09, DQ10, DQ12, DQ14, DQ26, DQ27, DQ34) is printed as `ERROR   database checks, column "DQxx": …` and rolls the whole import back. Warning rows are not repeated here; run the checks file to see them.
+
 ---
 
 ## 4. Graph derivation

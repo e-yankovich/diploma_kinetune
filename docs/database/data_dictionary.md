@@ -532,7 +532,7 @@ Data quality is grouped by dimension. Single-table rules are listed in §4. The 
 | DQ13 | Consistency | Plan item positions in a phase are continuous 1..n | A + Q | warning |
 | DQ14 | Completeness | `rule` holds exactly BR1–BR11 | Q | error |
 | DQ15 | Plausibility | Check-ins per session ≤ `participants_present` | Q | warning (flag for K2) |
-| DQ16 | Validity | New plan items and candidates reference active exercises only | A | error |
+| DQ16 | Validity | New plan items and candidates reference active exercises only (A); plans that use an exercise deactivated later are reported (Q) | A + Q | error (A) / warning (Q) |
 | DQ17 | Validity | A progression target is not easier than its source | Q | warning |
 | DQ18 | Uniqueness | No duplicate names or codes in reference and library tables | C (UNIQUE) | error |
 | DQ19 | Referential integrity | No orphan rows: every FK value exists in its parent | C (FK) | error |
