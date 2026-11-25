@@ -1,14 +1,21 @@
 # Kinetune — local / pilot environment
 #
-#   cp .env.example .env        # then set a real password
-#   docker compose up -d        # starts PostgreSQL, then applies migrations
-#   docker compose logs migrate # shows which migrations were applied
+#   cp .env.example .env              # then set real passwords
+#   docker compose up -d --build      # db -> migrate -> backend -> frontend
+#   docker compose logs migrate       # shows which migrations were applied
 #
 # The database structure is never created by hand: the one-shot "migrate"
 # service runs "alembic upgrade head" every time the stack starts.
 # Already-applied migrations are skipped (tracked in table alembic_version).
+# Services, images, variables and the container diagram: docs/containers/README.md
 
 name: kinetune
+
+# Two isolated networks: the database is reachable only from "data"; the
+# frontend reaches only the backend through "web".
+networks:
+  data:
+  web:
 
 services:
   db:
@@ -32,6 +39,7 @@ services:
       - pgdata:/var/lib/postgresql
       # login roles are created once, when the data volume is first initialised
       - ./db/init:/docker-entrypoint-initdb.d:ro
+    networks: [data]
     ports:
       # reachable only from this machine, not from the network
       - "127.0.0.1:${DB_PORT:-5432}:5432"
@@ -45,6 +53,7 @@ services:
 
   migrate:
     build: ./db
+    image: kinetune-db-tools:${APP_VERSION:-0.1.0}
     restart: "no"                 # runs once and exits
     environment:
       DB_HOST: db
@@ -54,10 +63,46 @@ services:
       # so every object and every default privilege is owned by that role
       POSTGRES_USER: kinetune_migrator
       POSTGRES_PASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+    networks: [data]
     depends_on:
       db:
         condition: service_healthy
     command: ["alembic", "upgrade", "head"]
+
+  backend:
+    build: ./backend
+    image: kinetune-backend:${APP_VERSION:-0.1.0}
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      # the application role (group app_write), never the superuser or the migrator
+      DB_USER: kinetune_api
+      DB_PASSWORD: ${API_PASSWORD:?set API_PASSWORD in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks: [data, web]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      # the API never starts against an outdated schema
+      migrate:
+        condition: service_completed_successfully
+    # healthcheck: defined in backend/Dockerfile (GET /health, checks the database)
+
+  frontend:
+    build: ./frontend
+    image: kinetune-frontend:${APP_VERSION:-0.1.0}
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    networks: [web]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    # healthcheck: defined in frontend/Dockerfile
 
   # Exercise library import — NOT part of the default stack. Run it after
   # the migrations, from the repository root:
@@ -67,6 +112,7 @@ services:
   # One transaction: on any problem nothing is written (docs/database/library_import.md).
   import-library:
     build: ./db
+    image: kinetune-db-tools:${APP_VERSION:-0.1.0}
     profiles: ["import"]
     restart: "no"
     environment:
@@ -77,6 +123,7 @@ services:
       PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       PGUSER: kinetune_admin
       PGPASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+    networks: [data]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -98,18 +145,13 @@ services:
       PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       PGUSER: kinetune_migrator
       PGPASSWORD: ${MIGRATOR_PASSWORD:?set MIGRATOR_PASSWORD in .env}
+    networks: [data]
     depends_on:
       migrate:
         condition: service_completed_successfully
     volumes:
       - ./db/seed:/seed:ro
     entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/seed/test_data.sql"]
-
-  # The backend (FastAPI) will be added here with:
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
-  # so the API never starts against an outdated schema.
 
 volumes:
   pgdata:

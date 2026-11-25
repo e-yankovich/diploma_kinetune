@@ -1,7 +1,7 @@
 # Kinetune
 
 Hybrid recommendation system for adapting group training plans (diploma project).
-This repository currently contains the **database layer**; the backend (FastAPI) and frontend (React) will be added to the same Docker Compose stack.
+This repository contains the database layer and a prototype slice of the application: a FastAPI backend and a React frontend for the exercise library, all in one Docker Compose stack ([containers](docs/containers/README.md)).
 
 ## Quick start
 
@@ -14,8 +14,8 @@ Requirements: Docker with Docker Compose v2. All commands run from the repositor
 # 1. secrets
 cp .env.example .env          # then set real passwords (see "Secrets" below)
 
-# 2. database and migrations 0001–0004
-docker compose up -d          # starts PostgreSQL 18, then the one-shot "migrate" service
+# 2. database, migrations 0001–0004, backend and frontend
+docker compose up -d --build  # db -> migrate -> backend -> frontend
 docker compose logs migrate   # "Running upgrade ... -> 0004, Password policy ..."
 
 # 3. exercise library from the author's spreadsheet (db/library/kinetune_library.xlsx)
@@ -35,6 +35,8 @@ docker compose --profile test run --rm seed-test
   name. It refuses to run if the database already has users or if the library is empty.
   Contents: [`docs/database/test_data.md`](docs/database/test_data.md) §2.
 - Then run the checks and tests ("Running the tests" below).
+- Open the app at <http://localhost:8080> and the API docs at <http://localhost:8000/docs>
+  ([API documentation](docs/api/README.md), [frontend](docs/frontend/architecture.md)).
 
 Connect with any client on `localhost:${DB_PORT}` (default 5432; reachable only from
 this machine), database `kinetune`, schema `kinetune`. The superuser is for
@@ -106,7 +108,9 @@ The full privilege matrix and the checklist for new objects are in
 ## Repository layout
 
 ```text
-docker-compose.yml           db + migrate; import-library (profile "import"); seed-test (profile "test")
+docker-compose.yml           db, migrate, backend, frontend; import-library (profile "import"); seed-test (profile "test")
+backend/                     FastAPI app, tests, Dockerfile
+frontend/                    React SPA, tests, Dockerfile (nginx)
 .env.example                 template for secrets (.env is git-ignored)
 db/
   01_schema.sql              DDL: types, tables, constraints, indexes, comments
@@ -134,6 +138,10 @@ db/
     run_ddl_test.sh          runs the smoke test on a scratch database
   Dockerfile, requirements.txt          image of the "migrate" service
 docs/
+  api/                       API documentation and OpenAPI specification
+  frontend/                  frontend architecture
+  containers/                images, variables, container diagram, resources
+  testing.md                 testing strategy and coverage
   database/
     kinetune_schema.dbml     logical schema (render at dbdiagram.io)
     kinetune-er-diagram.png  ER diagram rendered from the DBML
